@@ -9,8 +9,12 @@ app.use(express.static("public"));
 const server = createServer(app);
 const wss = new WebSocketServer({ server });
 
-const SPEED = 140;     // px/sec
-const TICK_HZ = 15;    // server tickrate (Hz)
+const SPEED = 140;        // px/sec
+const TICK_HZ = 15;       // server tickrate (Hz)
+const STUN_MS = 2000;     // trap stun length
+const SCORE_TO_WIN = 5;   // score race target
+const WIN_BANNER_MS = 3000; // ms to show winner before reset
+
 function now() { return Date.now(); }
 
 // ---------------------------------------------------------------------
@@ -85,15 +89,48 @@ const STATE = {
   players: new Map(),   // id -> player
   roomItems: {},        // roomName -> [ {id,x,y,label}, ... ]
   roomTraps: {},        // roomName -> [ {id,x,y,owner,armed}, ... ]
-  winner: null          // { id, time } or null
+
+  // winner: { id, type, until } OR null
+  winner: null
 };
 
-// init per-room state
-for (const roomName of Object.keys(ROOM_TEMPLATES)) {
-  const tmpl = ROOM_TEMPLATES[roomName];
-  STATE.roomItems[roomName] = tmpl.items.map(it => ({ ...it }));
-  STATE.roomTraps[roomName] = [];
+// initialize room items/traps from template
+function resetRoomsAndItems() {
+  STATE.roomItems = {};
+  STATE.roomTraps = {};
+  for (const roomName of Object.keys(ROOM_TEMPLATES)) {
+    const tmpl = ROOM_TEMPLATES[roomName];
+    STATE.roomItems[roomName] = tmpl.items.map(it => ({ ...it }));
+    STATE.roomTraps[roomName] = [];
+  }
 }
+
+// full round reset after banner timeout
+function hardResetRound() {
+  console.log("[server] HARD RESET ROUND");
+
+  // reset rooms
+  resetRoomsAndItems();
+
+  // wipe winner BEFORE resuming play
+  STATE.winner = null;
+
+  // respawn/reset every player
+  STATE.players.forEach((p) => {
+    const s = spawnPos();
+    p.room = s.room;
+    p.x = s.x;
+    p.y = s.y;
+    p.vx = 0;
+    p.vy = 0;
+    p.inventory = [];
+    p.stunnedUntil = 0;
+    p.score = 0;
+  });
+}
+
+// boot-time init
+resetRoomsAndItems();
 
 // ---------------------------------------------------------------------
 // HELPERS
@@ -120,6 +157,21 @@ function randColor() {
   return palette[Math.floor(Math.random() * palette.length)];
 }
 
+// Are we currently in "winner freeze" time?
+function inWinnerFreeze() {
+  if (!STATE.winner) return false;
+  return now() < STATE.winner.until;
+}
+
+// After freeze ends, trigger a hard reset (one time)
+function maybeEndWinnerFreeze() {
+  if (!STATE.winner) return;
+  if (now() >= STATE.winner.until) {
+    // freeze is over, do hard reset round
+    hardResetRound();
+  }
+}
+
 // ---------------------------------------------------------------------
 // NEW CONNECTION
 // ---------------------------------------------------------------------
@@ -140,8 +192,10 @@ wss.on("connection", (ws) => {
     lastSeq: 0,
     lastHeard: now(),
 
-    inventory: [],    // [{id,label}]
-    stunnedUntil: 0,  // timestamp (ms)
+    inventory: [],     // [{id,label}]
+    stunnedUntil: 0,   // timestamp (ms)
+    score: 0,          // trap points
+
     _ws: ws
   };
 
@@ -186,8 +240,8 @@ wss.on("connection", (ws) => {
 // ---------------------------------------------------------------------
 
 function handleInput(player, m) {
-  // If stunned, ignore movement commands
-  if (player.stunnedUntil > now()) {
+  // If we're in freeze OR they're stunned, ignore movement
+  if (inWinnerFreeze() || player.stunnedUntil > now()) {
     player.vx = 0;
     player.vy = 0;
     return;
@@ -207,6 +261,9 @@ function handleInput(player, m) {
 
 // pick up closest item in the room
 function handlePickup(player) {
+  // You shouldn't be able to pick stuff up during freeze either
+  if (inWinnerFreeze()) return;
+
   const roomName = player.room;
   const itemsInRoom = STATE.roomItems[roomName];
   if (!itemsInRoom || !itemsInRoom.length) return;
@@ -231,6 +288,8 @@ function handlePickup(player) {
 
 // place a trap in the current room if you have TRAP KIT
 function handlePlaceTrap(player) {
+  if (inWinnerFreeze()) return;
+
   const trapIndex = player.inventory.findIndex(
     it => it.id === "trap" || it.label === "TRAP KIT"
   );
@@ -268,11 +327,16 @@ function step(dt) {
   const tNow = now();
 
   STATE.players.forEach((p) => {
-    // If stunned, freeze
-    if (p.stunnedUntil > tNow) {
+    // During winner freeze, no movement at all
+    if (inWinnerFreeze()) {
+      p.vx = 0;
+      p.vy = 0;
+    } else if (p.stunnedUntil > tNow) {
+      // stunned, no movement
       p.vx = 0;
       p.vy = 0;
     } else {
+      // normal movement
       p.x += p.vx * dt;
       p.y += p.vy * dt;
     }
@@ -282,36 +346,48 @@ function step(dt) {
     p.x = Math.max(16, Math.min(def.w - 16, p.x));
     p.y = Math.max(16, Math.min(def.h - 16, p.y));
 
-    // Door teleport
-    for (const door of def.doors) {
-      const inside =
-        p.x > door.x &&
-        p.x < door.x + door.w &&
-        p.y > door.y &&
-        p.y < door.y + door.h;
+    // Door teleport (only if not frozen)
+    if (!inWinnerFreeze()) {
+      for (const door of def.doors) {
+        const inside =
+          p.x > door.x &&
+          p.x < door.x + door.w &&
+          p.y > door.y &&
+          p.y < door.y + door.h;
 
-      if (inside) {
-        console.log(
-          `[server] ${p.id} GOES THROUGH DOOR ${p.room} -> ${door.targetRoom}`
-        );
-        p.room = door.targetRoom;
-        p.x = door.targetX;
-        p.y = door.targetY;
-        break;
+        if (inside) {
+          console.log(
+            `[server] ${p.id} GOES THROUGH DOOR ${p.room} -> ${door.targetRoom}`
+          );
+          p.room = door.targetRoom;
+          p.x = door.targetX;
+          p.y = door.targetY;
+          break;
+        }
       }
     }
 
-    // Trap trigger (AFTER door travel)
-    applyTrapIfHit(p, tNow);
+    // Trap trigger (AFTER door travel, not during freeze)
+    if (!inWinnerFreeze()) {
+      applyTrapIfHit(p, tNow);
+    }
   });
 
-  checkWinCondition();
+  // Only check win conditions (and maybe start freeze) if we're not already frozen
+  if (!inWinnerFreeze()) {
+    checkWinByEscape();
+    checkWinByScore();
+  } else {
+    // If freeze time expired, reset round
+    maybeEndWinnerFreeze();
+  }
+
   STATE.tick++;
 }
 
 // trap collision check
-function applyTrapIfHit(player, tNow) {
-  const roomName = player.room;
+function applyTrapIfHit(victim, tNow) {
+  const roomName = victim.room;
   const traps = STATE.roomTraps[roomName];
   if (!traps || !traps.length) return;
 
@@ -321,21 +397,21 @@ function applyTrapIfHit(player, tNow) {
     const tr = traps[i];
     if (!tr.armed) continue;
 
-    const dist = Math.hypot(player.x - tr.x, player.y - tr.y);
+    const dist = Math.hypot(victim.x - tr.x, victim.y - tr.y);
 
     if (dist < TRIGGER_RADIUS * 2) {
       console.log(
-        `[server] checking trap ${tr.id} vs player ${player.id} in ${roomName}: dist=${dist.toFixed(
+        `[server] checking trap ${tr.id} vs player ${victim.id} in ${roomName}: dist=${dist.toFixed(
           1
         )}, radius=${TRIGGER_RADIUS}`
       );
     }
 
-    // owner is immune, trap stays
-    if (player.id === tr.owner) {
+    // owner is immune
+    if (victim.id === tr.owner) {
       if (dist <= TRIGGER_RADIUS) {
         console.log(
-          `[server] ${player.id} is standing on their OWN trap ${tr.id} (safe)`
+          `[server] ${victim.id} is standing on their OWN trap ${tr.id} (safe)`
         );
       }
       continue;
@@ -344,15 +420,22 @@ function applyTrapIfHit(player, tNow) {
     // victim triggers it
     if (dist <= TRIGGER_RADIUS) {
       console.log(
-        `[server] TRAP TRIGGERED ${tr.id} on player ${player.id} in ${roomName} at (${tr.x},${tr.y})`
+        `[server] TRAP TRIGGERED ${tr.id} on player ${victim.id} in ${roomName} at (${tr.x},${tr.y})`
       );
 
       tr.armed = false;
 
-      // stun victim for 2s
-      player.stunnedUntil = tNow + 2000;
-      player.vx = 0;
-      player.vy = 0;
+      // stun victim
+      victim.stunnedUntil = tNow + STUN_MS;
+      victim.vx = 0;
+      victim.vy = 0;
+
+      // score for owner
+      const ownerPlayer = STATE.players.get(tr.owner);
+      if (ownerPlayer) {
+        ownerPlayer.score = (ownerPlayer.score || 0) + 1;
+        console.log(`[server] ${tr.owner} SCORE +1 => ${ownerPlayer.score}`);
+      }
 
       // remove trap from room
       traps.splice(i, 1);
@@ -363,10 +446,20 @@ function applyTrapIfHit(player, tNow) {
 }
 
 // ---------------------------------------------------------------------
-// WIN CONDITION
+// WIN CONDITIONS
 // ---------------------------------------------------------------------
 
-function checkWinCondition() {
+function startWinnerFreeze(winnerId, typeStr) {
+  STATE.winner = {
+    id: winnerId,
+    type: typeStr,       // "escape" or "score"
+    until: now() + WIN_BANNER_MS
+  };
+  console.log(`[server] WINNER (${typeStr.toUpperCase()}) IS ${winnerId}`);
+}
+
+function checkWinByEscape() {
+  // "escape" win: intel+key+exit
   if (STATE.winner) return;
 
   STATE.players.forEach((p) => {
@@ -388,8 +481,18 @@ function checkWinCondition() {
     const WIN_RADIUS = 24;
 
     if (distToExit <= WIN_RADIUS) {
-      STATE.winner = { id: p.id, time: now() };
-      console.log(`[server] WINNER IS ${p.id}`);
+      startWinnerFreeze(p.id, "escape");
+    }
+  });
+}
+
+function checkWinByScore() {
+  // "score" win: first to SCORE_TO_WIN
+  if (STATE.winner) return;
+
+  STATE.players.forEach((p) => {
+    if (p.score >= SCORE_TO_WIN) {
+      startWinnerFreeze(p.id, "score");
     }
   });
 }
@@ -410,24 +513,25 @@ function snapshotFor(playerId) {
 
   const tNow = now();
 
-  // Only include OTHER PLAYERS in same room
+  // players in same room + add shortId for nameplate
   const visiblePlayers = [];
   STATE.players.forEach((p) => {
     if (p.room === me.room) {
       visiblePlayers.push({
         id: p.id,
+        shortId: p.id.slice(0,4),
         room: p.room,
         x: Math.round(p.x),
         y: Math.round(p.y),
         color: p.color,
         isStunned: p.stunnedUntil > tNow,
-        stunMsRemaining: Math.max(p.stunnedUntil - tNow, 0)
+        stunMsRemaining: Math.max(p.stunnedUntil - tNow, 0),
+        score: p.score || 0
       });
     }
   });
 
-  // 🔥 CHANGE HERE:
-  // Only send traps in this room that BELONG TO YOU.
+  // only show YOUR traps to YOU
   const visibleTraps = trapsInRoom
     .filter(tr => tr.owner === me.id)
     .map(tr => ({
@@ -459,7 +563,7 @@ function snapshotFor(playerId) {
       label: it.label
     })),
 
-    traps: visibleTraps, // <- only yours
+    traps: visibleTraps,
 
     players: visiblePlayers,
 
@@ -468,10 +572,17 @@ function snapshotFor(playerId) {
       label: it.label
     })),
 
-    winner: STATE.winner ? { id: STATE.winner.id } : null
+    youScore: me.score || 0,
+    scoreTarget: SCORE_TO_WIN,
+
+    // If we're frozen, we still send winner so client can keep banner visible
+    winner: STATE.winner
+      ? { id: STATE.winner.id, type: STATE.winner.type }
+      : null
   };
 }
 
+// send one snapshot to one socket
 function sendSnapshot(ws) {
   const player = [...STATE.players.values()].find(p => p._ws === ws);
   if (!player) return;
@@ -484,6 +595,7 @@ function sendSnapshot(ws) {
   }
 }
 
+// broadcast snapshots to all connected
 function broadcastSnapshots() {
   STATE.players.forEach((p) => {
     const ws = p._ws;

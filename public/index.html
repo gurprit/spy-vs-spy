@@ -1,21 +1,138 @@
-<!doctype html>
+<!DOCTYPE html>
 <html>
   <head>
     <meta charset="utf-8" />
-    <title>Soy vs Spy - Map Prototype</title>
-    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>Spy vs Spy Proto</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no" />
     <style>
-      html, body {
+      body {
         margin: 0;
-        padding: 0;
         background: #0d0f14;
-        color: #eee;
-        font-family: system-ui, sans-serif;
+        font-family: sans-serif;
+        touch-action: none; /* prevent scroll while dragging joystick */
+        overflow: hidden;
+      }
+
+      /* mobile controls container */
+      .mobile-ui {
+        position: fixed;
+        left: 0;
+        top: 0;
+        width: 100vw;
+        height: 100vh;
+        pointer-events: none; /* children will re-enable */
+      }
+
+      /* D-pad wrapper bottom-left */
+      .dpad {
+        position: absolute;
+        left: 16px;
+        bottom: 16px;
+        width: 140px;
+        height: 140px;
+        pointer-events: none;
+      }
+
+      .dpad-btn {
+        position: absolute;
+        width: 48px;
+        height: 48px;
+        background: rgba(255,255,255,0.08);
+        border: 2px solid rgba(255,255,255,0.4);
+        border-radius: 12px;
+        color: #fff;
+        font-size: 18px;
+        font-weight: 600;
+        line-height: 44px;
+        text-align: center;
+        user-select: none;
+        pointer-events: auto; /* clickable */
+      }
+
+      .dpad-btn:active {
+        background: rgba(255,255,255,0.2);
+      }
+
+      /* up/left/down/right positions in the 140x140 pad */
+      .dpad-up    { left:46px; top:0px;    }
+      .dpad-left  { left:0px;  top:46px;   }
+      .dpad-down  { left:46px; top:92px;   }
+      .dpad-right { left:92px; top:46px;   }
+
+      /* Action button bottom-right */
+      .action-area {
+        position: absolute;
+        right: 24px;
+        bottom: 32px;
+        width: 100px;
+        height: 100px;
+        pointer-events: none;
+      }
+
+      .action-btn {
+        position: absolute;
+        right: 0;
+        bottom: 0;
+        width: 80px;
+        height: 80px;
+        border-radius: 40px;
+        background: radial-gradient(circle at 30% 30%, #ff6666 0%, #cc0000 70%);
+        border: 2px solid rgba(255,255,255,0.6);
+        box-shadow: 0 4px 12px rgba(0,0,0,0.6);
+        color: #fff;
+        font-size: 14px;
+        font-weight: 600;
+        text-align: center;
+        line-height: 76px;
+        user-select: none;
+        pointer-events: auto;
+      }
+
+      .action-btn:active {
+        filter: brightness(1.2);
+      }
+
+      /* Tiny helper text above button */
+      .action-hint {
+        position: absolute;
+        right: 0;
+        bottom: 84px;
+        width: 80px;
+        font-size: 10px;
+        line-height: 1.2em;
+        color: #fff;
+        text-align: center;
+        text-shadow: 0 0 4px #000;
+        font-family: sans-serif;
+        pointer-events: none;
+      }
+
+      /* Hide on desktop by default; show via @media when narrow */
+      .mobile-ui { display: none; }
+      @media (max-width: 768px), (max-height: 600px) {
+        .mobile-ui { display: block; }
       }
     </style>
-    <script src="https://cdn.jsdelivr.net/npm/phaser@3.80.0/dist/phaser.min.js"></script>
   </head>
+
   <body>
-    <script type="module" src="./client.js"></script>
+    <!-- Phaser injects the canvas into body -->
+    <script src="phaser.min.js"></script>
+    <script defer src="client.js"></script>
+
+    <!-- MOBILE CONTROLS OVERLAY -->
+    <div class="mobile-ui" id="mobile-ui">
+      <div class="dpad" id="dpad">
+        <div class="dpad-btn dpad-up"    data-dir="up">▲</div>
+        <div class="dpad-btn dpad-left"  data-dir="left">◀</div>
+        <div class="dpad-btn dpad-down"  data-dir="down">▼</div>
+        <div class="dpad-btn dpad-right" data-dir="right">▶</div>
+      </div>
+
+      <div class="action-area">
+        <div class="action-hint">tap: PICKUP<br>hold: TRAP</div>
+        <div class="action-btn" id="action-btn">A</div>
+      </div>
+    </div>
   </body>
 </html>

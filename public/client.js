@@ -11,19 +11,28 @@ let ws;
 let myId = null;
 let seq = 0;
 
+// virtual input state (for mobile dpad)
+let virtualDX = 0;
+let virtualDY = 0;
+
+// tap vs hold timer for action button
+let actionTouchStartTime = 0;
+
 let latest = {
   room: null,
   roomW: 320,
   roomH: 200,
   doors: [],
   items: [],
-  traps: [],         // [{id,x,y,owner}]
-  players: [],       // [{id,x,y,color,isStunned,stunMsRemaining}]
+  traps: [],         // [{id,x,y,owner}] (only mine)
+  players: [],       // [{id,shortId,x,y,color,isStunned,stunMsRemaining,score}]
   yourInventory: [],
+  youScore: 0,
+  scoreTarget: 5,
   winner: null
 };
 
-const renderPlayers = new Map(); // id -> { gfx, alertText, x, y }
+const renderPlayers = new Map(); // id -> { gfx, alertText, nameText, x, y }
 let sceneRef = null;
 
 const game = new Phaser.Game({
@@ -51,9 +60,12 @@ function create() {
   scene.uiLayer = scene.add.layer();
   scene.winLayer = scene.add.layer();
 
-  // Input
+  // Keyboard input
   scene.cursors = scene.input.keyboard.createCursorKeys();
   scene.keys = scene.input.keyboard.addKeys("W,A,S,D,E,SPACE,T");
+
+  // Hook up mobile controls (if present in DOM)
+  setupMobileControls();
 
   // WS
   ws = new WebSocket(WS_URL);
@@ -75,7 +87,7 @@ function create() {
       latest = m;
 
       drawRoom(scene, latest);
-      drawInventory(scene, latest.yourInventory || []);
+      drawHUD(scene, latest);
       drawWinner(scene, latest.winner);
     }
   };
@@ -88,19 +100,29 @@ function update(time, delta) {
   const scene = this;
   const dt = delta / 1000;
 
-  // Movement input
+  // 1. COLLECT INPUT (keyboard OR virtual)
   let dx = 0, dy = 0;
+
+  // keyboard first
   if (scene.cursors.left.isDown || scene.keys.A.isDown) dx -= 1;
   if (scene.cursors.right.isDown || scene.keys.D.isDown) dx += 1;
   if (scene.cursors.up.isDown || scene.keys.W.isDown) dy -= 1;
   if (scene.cursors.down.isDown || scene.keys.S.isDown) dy += 1;
 
+  // if keyboard is neutral, fall back to touch dpad
+  if (dx === 0 && dy === 0) {
+    dx = virtualDX;
+    dy = virtualDY;
+  }
+
+  // send movement every frame, same as before
   seq++;
   if (ws && ws.readyState === 1) {
     ws.send(JSON.stringify({ t: "input", seq, dx, dy }));
   }
 
-  // Pickup item (E / SPACE)
+  // 2. Keyboard action shortcuts (desktop)
+  // Pickup (E / SPACE)
   if ((scene.keys.SPACE.isDown || scene.keys.E.isDown) && ws && ws.readyState === 1) {
     ws.send(JSON.stringify({ t: "pickup" }));
   }
@@ -110,12 +132,11 @@ function update(time, delta) {
     ws.send(JSON.stringify({ t: "placeTrap" }));
   }
 
-  // Render players w/ stun FX
+  // 3. Render players (circles + nameplates + stun !!)
   const seen = new Set();
   (latest.players || []).forEach(p => {
-    const rp = ensurePlayer(scene, p.id);
+    const rp = ensurePlayer(scene, p.id, p.shortId);
 
-    // stunned players: bigger + red
     const stunned = p.isStunned;
     const drawColor = stunned ? "#ff3333" : p.color;
     const radius = stunned ? 12 : 8;
@@ -128,7 +149,7 @@ function update(time, delta) {
     rp.y = Phaser.Math.Linear(rp.y, sy, 0.4);
     rp.gfx.setPosition(rp.x, rp.y);
 
-    // "!!" over stunned spy
+    // "!!" if stunned
     if (stunned && p.stunMsRemaining > 0) {
       if (!rp.alertText) {
         rp.alertText = scene.add.text(
@@ -147,17 +168,133 @@ function update(time, delta) {
       }
     }
 
+    // nameplate under the player (shortId)
+    if (!rp.nameText) {
+      rp.nameText = scene.add.text(
+        rp.x,
+        rp.y + radius + 4,
+        p.shortId || "????",
+        { fontSize: "10px", color: "#ffffff" }
+      ).setOrigin(0.5, 0);
+      scene.playerLayer.add(rp.nameText);
+    }
+    rp.nameText.setText(p.shortId || "????");
+    rp.nameText.setPosition(rp.x, rp.y + radius + 4);
+    rp.nameText.setVisible(true);
+
     seen.add(p.id);
   });
 
-  // Cleanup any players that vanished
+  // Cleanup vanished players
   for (const [id, rp] of renderPlayers.entries()) {
     if (!seen.has(id)) {
       if (rp.alertText) rp.alertText.destroy();
+      if (rp.nameText) rp.nameText.destroy();
       rp.gfx.destroy();
       renderPlayers.delete(id);
     }
   }
+}
+
+// ---------------------------------------------------------------------
+// MOBILE CONTROL SETUP
+// ---------------------------------------------------------------------
+
+function setupMobileControls() {
+  const dpadEl = document.getElementById("dpad");
+  const actionBtn = document.getElementById("action-btn");
+
+  if (!dpadEl || !actionBtn) {
+    // desktop or no overlay
+    return;
+  }
+
+  // prevent context menu on long press etc.
+  actionBtn.addEventListener("contextmenu", e => e.preventDefault());
+
+  // D-PAD:
+  // We listen to touchstart/mousedown and touchend/mouseup per arrow.
+  // Multiple directions can be pressed, e.g. up+left => (-1,-1)
+  const activeDirs = {
+    up: false,
+    down: false,
+    left: false,
+    right: false
+  };
+
+  function recomputeVirtualDir() {
+    let dx = 0;
+    let dy = 0;
+    if (activeDirs.left)  dx -= 1;
+    if (activeDirs.right) dx += 1;
+    if (activeDirs.up)    dy -= 1;
+    if (activeDirs.down)  dy += 1;
+    // normalize diagonals a little? we don't need to; server normalizes speed.
+    virtualDX = dx;
+    virtualDY = dy;
+  }
+
+  // helper to attach press/release to each button
+  function bindDir(btnEl, dirName) {
+    if (!btnEl) return;
+
+    // pointerdown (covers mouse+touch in modern browsers)
+    btnEl.addEventListener("pointerdown", e => {
+      e.preventDefault();
+      activeDirs[dirName] = true;
+      recomputeVirtualDir();
+    });
+
+    // pointerup on button
+    btnEl.addEventListener("pointerup", e => {
+      e.preventDefault();
+      activeDirs[dirName] = false;
+      recomputeVirtualDir();
+    });
+
+    // pointerleave / pointercancel in case finger slides off
+    btnEl.addEventListener("pointercancel", e => {
+      activeDirs[dirName] = false;
+      recomputeVirtualDir();
+    });
+    btnEl.addEventListener("pointerout", e => {
+      // only clear if pointer is not pressed anymore
+      // but mobile sometimes fires pointerout while still down, so we'll be conservative:
+      // we'll not clear here. We'll rely on pointerup/cancel.
+    });
+  }
+
+  bindDir(dpadEl.querySelector('[data-dir="up"]'), "up");
+  bindDir(dpadEl.querySelector('[data-dir="down"]'), "down");
+  bindDir(dpadEl.querySelector('[data-dir="left"]'), "left");
+  bindDir(dpadEl.querySelector('[data-dir="right"]'), "right");
+
+  // ACTION BUTTON:
+  // tap = pickup
+  // hold >=250ms = placeTrap
+
+  actionBtn.addEventListener("pointerdown", e => {
+    e.preventDefault();
+    actionTouchStartTime = performance.now();
+  });
+
+  actionBtn.addEventListener("pointerup", e => {
+    e.preventDefault();
+    if (!ws || ws.readyState !== 1) return;
+
+    const heldFor = performance.now() - actionTouchStartTime;
+    if (heldFor >= 250) {
+      // long press -> place trap
+      ws.send(JSON.stringify({ t: "placeTrap" }));
+    } else {
+      // quick tap -> pickup
+      ws.send(JSON.stringify({ t: "pickup" }));
+    }
+  });
+
+  actionBtn.addEventListener("pointercancel", e => {
+    e.preventDefault();
+  });
 }
 
 // ---------------------------------------------------------------------
@@ -208,7 +345,7 @@ function drawRoom(scene, snap) {
     scene.doorLayer.add(doorLabel);
   });
 
-  // items (green)
+  // items (green rounded pill)
   (snap.items || []).forEach(it => {
     const { sx, sy } = roomToScreen(it.x, it.y, snap.roomW, snap.roomH);
 
@@ -228,11 +365,11 @@ function drawRoom(scene, snap) {
     scene.itemLayer.add(labelText);
   });
 
-  // traps (draw as a bold red "T" so it's super obvious)
+  // traps (you only see your own, from server)
   (snap.traps || []).forEach(tr => {
     const { sx, sy } = roomToScreen(tr.x, tr.y, snap.roomW, snap.roomH);
 
-    // giant T
+    // big T marker
     const trapText = scene.add.text(
       sx,
       sy,
@@ -241,7 +378,7 @@ function drawRoom(scene, snap) {
     ).setOrigin(0.5);
     scene.trapLayer.add(trapText);
 
-    // tiny owner id so we can debug whose trap is whose
+    // owner shortID
     const ownerShort = tr.owner ? tr.owner.slice(0,4) : "????";
     const ownerText = scene.add.text(
       sx,
@@ -254,16 +391,16 @@ function drawRoom(scene, snap) {
 }
 
 // ---------------------------------------------------------------------
-// INVENTORY HUD
+// HUD (inventory + score + hints)
 // ---------------------------------------------------------------------
 
-function drawInventory(scene, inv) {
+function drawHUD(scene, snap) {
   scene.uiLayer.removeAll(true);
 
   const padX = 8;
-  const padY = VIEW_H - 8 - 60;
-  const w = 220;
-  const h = 60;
+  const padY = VIEW_H - 8 - 80;
+  const w = 260;
+  const h = 80;
 
   const bg = scene.add.graphics();
   bg.fillStyle(0x000000, 0.6);
@@ -272,18 +409,40 @@ function drawInventory(scene, inv) {
   bg.strokeRect(padX, padY, w, h);
   scene.uiLayer.add(bg);
 
-  const title = scene.add.text(
+  // Score
+  const scoreLine = `SCORE: ${snap.youScore || 0} / ${snap.scoreTarget || 5}`;
+  const scoreText = scene.add.text(
     padX + 6,
     padY + 4,
-    "INV  (E/SPACE pick, T trap)",
+    scoreLine,
+    { fontSize: "12px", color: "#ffff55" }
+  );
+  scene.uiLayer.add(scoreText);
+
+  // Controls
+  const ctrlText = scene.add.text(
+    padX + 6,
+    padY + 20,
+    "tap A: pick / hold A: trap",
     { fontSize: "10px", color: "#ffffff" }
   );
-  scene.uiLayer.add(title);
+  scene.uiLayer.add(ctrlText);
 
+  // Inventory header
+  const invHead = scene.add.text(
+    padX + 6,
+    padY + 34,
+    "INV:",
+    { fontSize: "10px", color: "#ffffff" }
+  );
+  scene.uiLayer.add(invHead);
+
+  // Inventory items
+  const inv = snap.yourInventory || [];
   if (!inv.length) {
     const empty = scene.add.text(
-      padX + 6,
-      padY + 26,
+      padX + 26,
+      padY + 34,
       "(empty)",
       { fontSize: "10px", color: "#aaaaaa" }
     );
@@ -291,13 +450,26 @@ function drawInventory(scene, inv) {
   } else {
     inv.forEach((it, idx) => {
       const line = scene.add.text(
-        padX + 6,
-        padY + 24 + idx * 12,
+        padX + 26,
+        padY + 34 + idx * 12,
         `- ${it.label}`,
         { fontSize: "10px", color: "#ffffff" }
       );
       scene.uiLayer.add(line);
     });
+  }
+
+  // EXIT hint
+  const hasIntel = inv.some(it => it.label === "INTEL");
+  const hasKey   = inv.some(it => it.label === "KEY");
+  if (hasIntel && hasKey) {
+    const hint = scene.add.text(
+      padX + 6,
+      padY + h - 14,
+      "GET TO EXIT!",
+      { fontSize: "10px", color: "#ff5555" }
+    );
+    scene.uiLayer.add(hint);
   }
 }
 
@@ -309,9 +481,17 @@ function drawWinner(scene, winner) {
   scene.winLayer.removeAll(true);
   if (!winner) return;
 
-  const textStr = (winner.id === myId)
-    ? "YOU ESCAPED!"
-    : "WINNER: " + winner.id.slice(0, 4);
+  let textStr;
+  if (winner.id === myId) {
+    textStr = winner.type === "escape"
+      ? "YOU ESCAPED!"
+      : "YOU WON THE ROUND!";
+  } else {
+    const shortId = winner.id.slice(0,4);
+    textStr = winner.type === "escape"
+      ? `PLAYER ${shortId} ESCAPED!`
+      : `PLAYER ${shortId} WON THE ROUND!`;
+  }
 
   const bw = VIEW_W * 0.8;
   const bh = 60;
@@ -329,7 +509,7 @@ function drawWinner(scene, winner) {
     bx + bw / 2,
     by + bh / 2,
     textStr,
-    { fontSize: "16px", color: "#ffcc33" }
+    { fontSize: "16px", color: "#ffcc33", align: "center" }
   ).setOrigin(0.5);
   scene.winLayer.add(t);
 }
@@ -338,17 +518,32 @@ function drawWinner(scene, winner) {
 // PLAYER RENDERING
 // ---------------------------------------------------------------------
 
-function ensurePlayer(scene, id) {
+function ensurePlayer(scene, id, shortId) {
   if (renderPlayers.has(id)) return renderPlayers.get(id);
 
-  // main body
+  // main circle
   const gfx = scene.add.graphics();
   gfx.fillStyle(0xffffff, 1);
   gfx.fillCircle(0, 0, 8);
   scene.playerLayer.add(gfx);
 
-  // alert text (for stun) will be created lazily
-  const entry = { x: VIEW_W/2, y: VIEW_H/2, gfx, alertText: null };
+  const entry = {
+    x: VIEW_W/2,
+    y: VIEW_H/2,
+    gfx,
+    alertText: null,
+    nameText: null
+  };
+
+  // create name text so it's persistent
+  entry.nameText = scene.add.text(
+    entry.x,
+    entry.y + 12,
+    shortId || id.slice(0,4),
+    { fontSize: "10px", color: "#ffffff" }
+  ).setOrigin(0.5, 0);
+  scene.playerLayer.add(entry.nameText);
+
   renderPlayers.set(id, entry);
   return entry;
 }
@@ -372,8 +567,8 @@ function getRoomScreenBox(roomW, roomH) {
   const drawnW = roomW * scale;
   const drawnH = roomH * scale;
 
-  const offX = (VIEW_W - drawnW) / 2;
-  const offY = (VIEW_H - drawnH) / 2;
+  const offX = (window.innerWidth  || VIEW_W) / 2 - drawnW / 2;
+  const offY = (window.innerHeight || VIEW_H) / 2 - drawnH / 2;
 
   return {
     roomX: offX,
