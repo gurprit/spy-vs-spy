@@ -49,6 +49,7 @@ let sceneRef = null;
 
 const game = new Phaser.Game({
   type: Phaser.AUTO,
+  parent: "game-canvas-holder", // IMPORTANT: attach canvas to the holder div
   backgroundColor: "#0d0f14",
   scale: {
     width: VIEW_W,
