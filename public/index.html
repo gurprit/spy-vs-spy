@@ -1,70 +1,213 @@
 <!DOCTYPE html>
-<html lang="en">
+<html>
 <head>
-  <meta charset="UTF-8" />
-  <meta
-    name="viewport"
-    content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no"
-  />
-  <title>Soy vs Spy</title>
-  <link rel="stylesheet" href="style.css" />
+  <meta charset="utf-8" />
+  <title>Spy vs Spy-ish</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1,user-scalable=no" />
+
+  <style>
+    body {
+      background: #0d0f14;
+      color: #fff;
+      font-family: system-ui, sans-serif;
+      margin: 0;
+      display: flex;
+      flex-direction: column;
+      height: 100vh;
+      overflow: hidden;
+    }
+
+    /* Layout: canvas on top, HUD under it */
+    #game-container {
+      flex: 0 0 auto;
+      position: relative;
+      background: #000;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+    }
+
+    canvas {
+      touch-action: none;
+    }
+
+    #hud-panel {
+      flex: 1 1 auto;
+      background: rgba(0,0,0,0.6);
+      border-top: 1px solid #444;
+      color: #fff;
+      font-size: 12px;
+      line-height: 1.3;
+      overflow-y: auto;
+      padding: 8px 12px;
+    }
+
+    #score-line {
+      font-size: 13px;
+      font-weight: 600;
+      color: #ffcc33;
+      margin-bottom: 4px;
+    }
+
+    #legend {
+      color: #aaa;
+      font-size: 11px;
+      white-space: pre-line;
+      margin-bottom: 8px;
+    }
+
+    #inventory-section h3 {
+      font-size: 12px;
+      margin: 0 0 4px 0;
+      font-weight: 600;
+      color: #fff;
+    }
+
+    #inventory-list {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      margin-bottom: 8px;
+    }
+
+    .inv-item {
+      background: #1a1a1a;
+      border: 1px solid #555;
+      border-radius: 4px;
+      padding: 4px 6px;
+      font-size: 12px;
+      color: #fff;
+      cursor: pointer;
+      user-select: none;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+
+    .inv-item.selected {
+      border-color: #ffcc33;
+      color: #ffcc33;
+    }
+
+    .inv-slot-idx {
+      font-size: 10px;
+      color: #888;
+      margin-right: 6px;
+    }
+
+    #item-desc-box {
+      background: #111;
+      border: 1px solid #33ff33;
+      border-radius: 4px;
+      padding: 6px;
+      margin-bottom: 8px;
+      font-size: 11px;
+      color: #fff;
+      min-height: 40px;
+      white-space: pre-line;
+    }
+
+    #radar-box {
+      background: #111;
+      border: 1px solid #33ff33;
+      border-radius: 4px;
+      padding: 6px;
+      font-size: 11px;
+      color: #33ff33;
+      white-space: pre-line;
+    }
+
+    /* mobile controls bar */
+    #mobile-controls {
+      position: absolute;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      display: none; /* we enable via JS on mobile */
+      justify-content: flex-end;
+      gap: 8px;
+      padding: 8px;
+      pointer-events: none; /* we re-enable per button */
+    }
+
+    .ctrl-btn {
+      background: rgba(34,34,34,0.7);
+      border: 2px solid #fff;
+      border-radius: 8px;
+      color: #fff;
+      font-size: 11px;
+      font-weight: 600;
+      text-align: center;
+      width: 50px;
+      height: 50px;
+      line-height: 46px;
+      pointer-events: auto;
+      user-select: none;
+    }
+
+    .ctrl-btn:active {
+      background: rgba(255,255,255,0.15);
+    }
+
+    /* For desktop we can give HUD ~40% height */
+    @media (min-width: 768px) {
+      body {
+        flex-direction: row;
+      }
+      #game-container {
+        flex: 0 0 auto;
+        width: 60vw;
+        height: 100vh;
+      }
+      #hud-panel {
+        flex: 1 1 auto;
+        height: 100vh;
+        border-top: none;
+        border-left: 1px solid #444;
+        overflow-y: auto;
+      }
+      #mobile-controls {
+        position: fixed;
+      }
+    }
+  </style>
 </head>
 <body>
 
-  <div id="app-col">
-    <!-- 1. GAME AREA -->
-    <section id="game-area">
-      <!-- Phaser will inject its <canvas> into this div -->
-      <div id="game-canvas-holder"></div>
-
-      <!-- round win banner (initially hidden via CSS) -->
-      <div id="win-banner">placeholder</div>
-    </section>
-
-    <!-- 2. HUD PANEL (score, inventory, hints, radar later if needed) -->
-    <section id="hud-panel">
-      <div id="hud-row-top">
-        <div class="hud-score" id="hud-score">SCORE: 0 / 5</div>
-        <div class="hud-exit-hint" id="hud-exit-hint" style="display:none;">
-          GET TO EXIT!
-        </div>
-        <div class="hud-controls-hint" id="hud-controls-hint">
-          tap A: pick / hold A: trap
-        </div>
-      </div>
-
-      <!-- radar/intel readout if active -->
-      <div id="radar-box" style="display:none;">
-        <div id="radar-header">RADAR</div>
-        <div id="radar-lines">
-          <div class="radar-line" id="radar-intel">INTEL: ?</div>
-          <div class="radar-line" id="radar-key">KEY: ?</div>
-          <div class="radar-line" id="radar-trapkit">TRAP KIT: ?</div>
-        </div>
-      </div>
-
-      <div id="inv-header">INV:</div>
-      <div id="inv-list"><span class="empty">(empty)</span></div>
-    </section>
-
-    <!-- 3. CONTROLS PANEL (touch dpad + actions for mobile) -->
-    <section id="controls-panel">
-      <div class="dpad" id="dpad">
-        <div class="dpad-btn dpad-up" data-dir="up">▲</div>
-        <div class="dpad-btn dpad-left" data-dir="left">◀</div>
-        <div class="dpad-btn dpad-down" data-dir="down">▼</div>
-        <div class="dpad-btn dpad-right" data-dir="right">▶</div>
-      </div>
-
-      <div class="action-area">
-        <div class="action-hint">tap: PICKUP<br>hold: TRAP<br>double: USE</div>
-        <div class="action-btn" id="action-btn">A</div>
-      </div>
-    </section>
+  <div id="game-container">
+    <!-- Phaser injects canvas here -->
+    <div id="mobile-controls">
+      <div class="ctrl-btn" id="btn-pick">PICK</div>
+      <div class="ctrl-btn" id="btn-trap">TRAP</div>
+      <div class="ctrl-btn" id="btn-use">USE</div>
+    </div>
   </div>
 
+  <div id="hud-panel">
+    <div id="score-line">Score 0 / 5</div>
+    <div id="legend">Click an item,
+A=USE  T=TRAP  E/SPACE=PICK</div>
 
-  <script src="https://cdn.jsdelivr.net/npm/phaser@3.80.1/dist/phaser.min.js"></script>
-  <script src="client.js"></script>
+    <section id="inventory-section">
+      <h3>INVENTORY</h3>
+      <div id="inventory-list">
+        <!-- dynamic -->
+      </div>
+    </section>
+
+    <div id="item-desc-box">
+      No item selected.
+    </div>
+
+    <div id="radar-box" style="display:none;">
+      RADAR:
+      Intel: ?
+      Key: ?
+      Trap Kit: ?
+    </div>
+  </div>
+
+      <script src="https://cdn.jsdelivr.net/npm/phaser@3.80.1/dist/phaser.min.js"></script>
+  <script src="client.js" type="module"></script>
 </body>
 </html>
