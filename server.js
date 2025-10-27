@@ -257,8 +257,8 @@ wss.on("connection", (ws) => {
       handlePlaceTrap(player);
     }
     if (m.t === "useItem") { // NEW
-      console.log(`[server] ${player.id} requests USE ITEM`);
-      handleUseItem(player);
+      console.log(`[server] ${player.id} requests USE ITEM idx=${m.which}`);
+      handleUseItem(player, m.which);
     }
   });
 
@@ -383,61 +383,68 @@ function handlePlaceTrap(player) {
 // --------------------------------------------------
 // Using power-ups (MAP, DISGUISE, SPRING)
 // --------------------------------------------------
-function handleUseItem(player) {
-  // We'll just use the FIRST relevant usable item we find in inventory.
-  // Priority order: DISGUISE -> MAP -> SPRING.
-  // You can change ordering later.
+function handleUseItem(player, whichIndexRaw) {
+  // whichIndexRaw might be undefined or null if client didn't send it
+  // In that case we just ignore.
+  const whichIndex = (typeof whichIndexRaw === "number")
+    ? whichIndexRaw
+    : null;
+
+  if (whichIndex === null) {
+    console.log(`[server] ${player.id} tried USE with no index`);
+    return;
+  }
+
+  const inv = player.inventory;
+  if (whichIndex < 0 || whichIndex >= inv.length) {
+    console.log(`[server] ${player.id} tried USE invalid index ${whichIndex}`);
+    return;
+  }
+
+  const item = inv[whichIndex];
+  if (!item) {
+    console.log(`[server] ${player.id} tried USE missing item at ${whichIndex}`);
+    return;
+  }
+
   const nowMs = now();
 
-  // 1. DISGUISE ("DISGUISE" / "paint")
-  let idx = player.inventory.findIndex(
-    it =>
-      it.id === "paint" ||
-      it.label === "DISGUISE"
-  );
-  if (idx !== -1) {
-    console.log(`[server] ${player.id} USED DISGUISE`);
+  // normalize id/label for easier matching
+  const name = (item.id || item.label || "").toUpperCase();
+
+  // DISGUISE (aka "paint" / "DISGUISE")
+  if (name.includes("DISGUISE") || name === "PAINT") {
+    console.log(`[server] ${player.id} USED DISGUISE from slot ${whichIndex}`);
     player.disguisedUntil = nowMs + DISGUISE_DURATION_MS;
-    // consume disguise
-    player.inventory.splice(idx, 1);
+    // consume item
+    inv.splice(whichIndex, 1);
     return;
   }
 
-  // 2. MAP ("MAP")
-  idx = player.inventory.findIndex(
-    it =>
-      it.id === "map" ||
-      it.label === "MAP"
-  );
-  if (idx !== -1) {
-    console.log(`[server] ${player.id} USED MAP / RADAR`);
+  // MAP (radar intel)
+  if (name.includes("MAP")) {
+    console.log(`[server] ${player.id} USED MAP/RADAR from slot ${whichIndex}`);
     player.radarRevealUntil = nowMs + RADAR_DURATION_MS;
-    // consume map
-    player.inventory.splice(idx, 1);
+    inv.splice(whichIndex, 1);
     return;
   }
 
-  // 3. SPRING ("SPRING")
-  idx = player.inventory.findIndex(
-    it =>
-      it.id === "spring" ||
-      it.label === "SPRING"
-  );
-  if (idx !== -1) {
-    // try to arm nearest door in this room
+  // SPRING (door trap)
+  if (name.includes("SPRING")) {
     const armed = tryArmDoorTrap(player);
     if (armed) {
-      console.log(`[server] ${player.id} ARMED DOOR SPRING TRAP in ${player.room}`);
-      // consume spring item only on success
-      player.inventory.splice(idx, 1);
+      console.log(`[server] ${player.id} ARMED DOOR SPRING TRAP via slot ${whichIndex}`);
+      inv.splice(whichIndex, 1);
     } else {
       console.log(`[server] ${player.id} tried SPRING but no door in range`);
     }
     return;
   }
 
-  // 4. (future: BOMB, SMOKE, etc...)
+  // default fallback: unhandled item
+  console.log(`[server] ${player.id} tried USE on ${item.label} but no effect implemented`);
 }
+
 
 // --------------------------------------------------
 // Door trap arming (SPRING)
