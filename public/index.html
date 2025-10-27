@@ -1,277 +1,70 @@
 <!DOCTYPE html>
-<html>
-  <head>
-    <meta charset="utf-8" />
-    <title>Spy vs Spy vs Spy vs Spy vs Spy</title>
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no" />
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta
+    name="viewport"
+    content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no"
+  />
+  <title>Soy vs Spy</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
 
-    <style>
-      :root {
-        --bg-dark: #0d0f14;
-        --panel-bg: rgba(0,0,0,0.6);
-        --panel-border: rgba(255,255,255,0.8);
-        --accent-yellow: #ffff55;
-        --accent-red: #ff5555;
-        --accent-win: #ffcc33;
-        --text-dim: #aaaaaa;
-        --text-light: #ffffff;
-      }
+  <div id="app-col">
+    <!-- 1. GAME AREA -->
+    <section id="game-area">
+      <!-- Phaser will inject its <canvas> into this div -->
+      <div id="game-canvas-holder"></div>
 
-      body {
-        margin: 0;
-        background: var(--bg-dark);
-        font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-        color: var(--text-light);
-        touch-action: none;
-        overflow: hidden;
-        display: flex;
-        flex-direction: column;
-        height: 100vh;
-      }
+      <!-- round win banner (initially hidden via CSS) -->
+      <div id="win-banner">placeholder</div>
+    </section>
 
-      /* full column layout */
-      #app-col {
-        display: flex;
-        flex-direction: column;
-        width: 100%;
-        height: 100%;
-      }
-
-      /* GAME AREA (Phaser canvas goes here) */
-      #game-area {
-        flex: 0 0 auto;
-        width: 100%;
-        /* height for game view: ~50% of screen on mobile, bigger on desktop */
-        height: 50vh;
-        max-height: 400px;
-        min-height: 240px;
-        position: relative;
-        background: #000;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        overflow: hidden;
-      }
-
-      /* Phaser will inject its <canvas> into this holder */
-      #game-canvas-holder {
-        position: relative;
-        width: 100%;
-        height: 100%;
-      }
-
-      /* WINNER BANNER overlays on top of just the game area */
-      #win-banner {
-        position: absolute;
-        left: 50%;
-        top: 50%;
-        transform: translate(-50%,-50%);
-        background: rgba(0,0,0,0.8);
-        border: 2px solid var(--accent-win);
-        border-radius: 8px;
-        padding: 12px 16px;
-        font-size: 16px;
-        font-weight: 600;
-        color: var(--accent-win);
-        text-align: center;
-        min-width: 60%;
-        max-width: 90%;
-        display: none; /* shown dynamically */
-        z-index: 10;
-      }
-
-      /* HUD PANEL (score + inventory) */
-      #hud-panel {
-        flex: 0 0 auto;
-        color: var(--text-light);
-        background: var(--panel-bg);
-        border-top: 1px solid var(--panel-border);
-        border-bottom: 1px solid var(--panel-border);
-        padding: 8px 12px;
-        font-size: 12px;
-        line-height: 1.4;
-      }
-
-      #hud-row-top {
-        display: flex;
-        flex-wrap: wrap;
-        justify-content: space-between;
-        row-gap: 4px;
-        column-gap: 8px;
-        margin-bottom: 4px;
-      }
-
-      .hud-score {
-        color: var(--accent-yellow);
-        font-weight: 600;
-      }
-
-      .hud-exit-hint {
-        color: var(--accent-red);
-        font-weight: 600;
-      }
-
-      .hud-controls-hint {
-        color: var(--text-light);
-        font-size: 11px;
-        opacity: 0.8;
-      }
-
-      #inv-header {
-        font-weight: 600;
-        margin-bottom: 2px;
-      }
-      #inv-list {
-        font-size: 12px;
-      }
-      #inv-list .empty {
-        color: var(--text-dim);
-        font-style: italic;
-      }
-
-      /* CONTROLS PANEL (dpad + button) */
-      #controls-panel {
-        position: absolute;
-        bottom: 0;
-        width: 100%;
-        border: 0;
-        background: transparent;
-        padding-bottom: 16px;
-      }
-
-      /* we absolutely position pad/button inside controls-panel so they float at bottom corners */
-      .dpad {
-        position: absolute;
-        left: 16px;
-        bottom: 16px;
-        width: 140px;
-        height: 140px;
-        pointer-events: none;
-      }
-
-      .dpad-btn {
-        position: absolute;
-        width: 48px;
-        height: 48px;
-        background: rgba(255,255,255,0.08);
-        border: 2px solid rgba(255,255,255,0.4);
-        border-radius: 12px;
-        color: #fff;
-        font-size: 18px;
-        font-weight: 600;
-        line-height: 44px;
-        text-align: center;
-        user-select: none;
-        pointer-events: auto;
-      }
-      .dpad-btn:active {
-        background: rgba(255,255,255,0.2);
-      }
-      .dpad-up    { left:46px; top:0px;    }
-      .dpad-left  { left:0px;  top:46px;   }
-      .dpad-down  { left:46px; top:92px;   }
-      .dpad-right { left:92px; top:46px;   }
-
-      .action-area {
-        position: absolute;
-        right: 24px;
-        bottom: 32px;
-        width: 100px;
-        height: 100px;
-        pointer-events: none;
-        text-align: center;
-        color: #fff;
-        text-shadow: 0 0 4px #000;
-        font-family: inherit;
-      }
-      .action-hint {
-        position: absolute;
-        right: 0;
-        bottom: 84px;
-        width: 80px;
-        font-size: 10px;
-        line-height: 1.2em;
-        color: #fff;
-        pointer-events: none;
-      }
-      .action-btn {
-        position: absolute;
-        right: 0;
-        bottom: 0;
-        width: 80px;
-        height: 80px;
-        border-radius: 40px;
-        background: radial-gradient(circle at 30% 30%, #ff6666 0%, #cc0000 70%);
-        border: 2px solid rgba(255,255,255,0.6);
-        box-shadow: 0 4px 12px rgba(0,0,0,0.6);
-        color: #fff;
-        font-size: 14px;
-        font-weight: 600;
-        text-align: center;
-        line-height: 76px;
-        user-select: none;
-        pointer-events: auto;
-      }
-      .action-btn:active {
-        filter: brightness(1.2);
-      }
-
-      /* Desktop tweaks: show bigger game area, hide on-screen controls if nice wide screen */
-      @media (min-width: 768px) and (min-height: 600px) {
-        #game-area {
-          height: 60vh;
-          max-height: 500px;
-        }
-        #controls-panel .dpad,
-        #controls-panel .action-area {
-          opacity: 0.5;
-        }
-      }
-    </style>
-
-    <!-- Phaser from CDN -->
-    <script src="https://cdn.jsdelivr.net/npm/phaser@3.80.1/dist/phaser.min.js"></script>
-  </head>
-
-  <body>
-    <div id="app-col">
-      <!-- 1. GAME AREA -->
-      <section id="game-area">
-        <div id="game-canvas-holder"></div>
-        <div id="win-banner">placeholder</div>
-      </section>
-
-      <!-- 2. HUD PANEL (score/inventory/etc) -->
-      <section id="hud-panel">
-        <div id="hud-row-top">
-          <div class="hud-score" id="hud-score">SCORE: 0 / 5</div>
-          <div class="hud-exit-hint" id="hud-exit-hint" style="display:none;">GET TO EXIT!</div>
-          <div class="hud-controls-hint" id="hud-controls-hint">
-            tap A: pick / hold A: trap
-          </div>
+    <!-- 2. HUD PANEL (score, inventory, hints, radar later if needed) -->
+    <section id="hud-panel">
+      <div id="hud-row-top">
+        <div class="hud-score" id="hud-score">SCORE: 0 / 5</div>
+        <div class="hud-exit-hint" id="hud-exit-hint" style="display:none;">
+          GET TO EXIT!
         </div>
-
-        <div id="inv-header">INV:</div>
-        <div id="inv-list"><span class="empty">(empty)</span></div>
-      </section>
-
-      <!-- 3. CONTROLS PANEL (D-pad and A button) -->
-      <section id="controls-panel">
-        <div class="dpad" id="dpad">
-          <div class="dpad-btn dpad-up"    data-dir="up">▲</div>
-          <div class="dpad-btn dpad-left"  data-dir="left">◀</div>
-          <div class="dpad-btn dpad-down"  data-dir="down">▼</div>
-          <div class="dpad-btn dpad-right" data-dir="right">▶</div>
+        <div class="hud-controls-hint" id="hud-controls-hint">
+          tap A: pick / hold A: trap
         </div>
+      </div>
 
-        <div class="action-area">
-          <div class="action-hint">tap: PICKUP<br>hold: TRAP</div>
-          <div class="action-btn" id="action-btn">A</div>
+      <!-- radar/intel readout if active -->
+      <div id="radar-box" style="display:none;">
+        <div id="radar-header">RADAR</div>
+        <div id="radar-lines">
+          <div class="radar-line" id="radar-intel">INTEL: ?</div>
+          <div class="radar-line" id="radar-key">KEY: ?</div>
+          <div class="radar-line" id="radar-trapkit">TRAP KIT: ?</div>
         </div>
-      </section>
-    </div>
+      </div>
 
-    <!-- Game logic -->
-    <script defer src="client.js"></script>
-  </body>
+      <div id="inv-header">INV:</div>
+      <div id="inv-list"><span class="empty">(empty)</span></div>
+    </section>
+
+    <!-- 3. CONTROLS PANEL (touch dpad + actions for mobile) -->
+    <section id="controls-panel">
+      <div class="dpad" id="dpad">
+        <div class="dpad-btn dpad-up" data-dir="up">▲</div>
+        <div class="dpad-btn dpad-left" data-dir="left">◀</div>
+        <div class="dpad-btn dpad-down" data-dir="down">▼</div>
+        <div class="dpad-btn dpad-right" data-dir="right">▶</div>
+      </div>
+
+      <div class="action-area">
+        <div class="action-hint">tap: PICKUP<br>hold: TRAP<br>double: USE</div>
+        <div class="action-btn" id="action-btn">A</div>
+      </div>
+    </section>
+  </div>
+
+
+  <script src="https://cdn.jsdelivr.net/npm/phaser@3.80.1/dist/phaser.min.js"></script>
+  <script src="client.js"></script>
+</body>
 </html>

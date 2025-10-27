@@ -1,0 +1,213 @@
+/* whole page column layout */
+html, body {
+  margin: 0;
+  padding: 0;
+  background: #0d0f14;
+  color: #fff;
+  font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  height: 100%;
+}
+
+#app-col {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  height: 100vh;          /* fill screen */
+  background: #0d0f14;
+  color: #fff;
+}
+
+/* ========= 1. GAME AREA (Phaser canvas here) ========= */
+
+#game-area {
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 8px 0;
+  background: #0d0f14;
+  position: relative;
+}
+
+/* The element Phaser will parent the <canvas> into */
+#game-canvas-holder {
+  width: 100%;
+  max-width: 480px;         /* desktop can get wider if you want */
+  aspect-ratio: 4 / 3;      /* keeps game view consistent in portrait */
+  background: #1e2535;
+  border: 2px solid #fff;
+  border-radius: 4px;
+  position: relative;
+  overflow: hidden;
+}
+
+/* Win / round banner overlays canvas holder */
+#win-banner {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 80%;
+  transform: translate(-50%, -50%);
+  background: rgba(0,0,0,0.8);
+  border: 2px solid #ffcc33;
+  border-radius: 4px;
+  color: #ffcc33;
+  font-size: 16px;
+  text-align: center;
+  padding: 12px;
+  display: none;           /* JS sets to block when round over */
+  pointer-events: none;
+  z-index: 10;
+}
+
+/* ========= 2. HUD PANEL ========= */
+
+#hud-panel {
+  flex: 0 0 auto;
+  background: rgba(0,0,0,0.6);
+  border-top: 1px solid #444;
+  border-bottom: 1px solid #444;
+  padding: 8px;
+  font-size: 12px;
+  line-height: 1.4;
+  color: #fff;
+}
+
+#hud-row-top {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 6px;
+  margin-bottom: 6px;
+}
+
+.hud-score {
+  font-weight: bold;
+  color: #fff;
+}
+.hud-exit-hint {
+  color: #33ff33;
+  font-weight: bold;
+}
+.hud-controls-hint {
+  color: #aaa;
+  font-size: 11px;
+}
+
+/* radar panel */
+#radar-box {
+  border: 1px solid #33ff33;
+  border-radius: 4px;
+  padding: 6px;
+  margin-bottom: 6px;
+  background: rgba(0,0,0,0.4);
+  color: #fff;
+  font-size: 11px;
+  line-height: 1.3;
+}
+#radar-header {
+  color: #33ff33;
+  font-weight: bold;
+  margin-bottom: 4px;
+  font-size: 11px;
+}
+.radar-line {
+  color: #fff;
+  font-size: 11px;
+}
+
+#inv-header {
+  font-weight: bold;
+  color: #fff;
+  margin-bottom: 4px;
+}
+
+#inv-list {
+  color: #fff;
+  font-size: 12px;
+}
+#inv-list .empty {
+  color: #888;
+  font-style: italic;
+}
+
+/* ========= 3. CONTROLS PANEL ========= */
+
+#controls-panel {
+  flex: 1 1 auto;
+  display: flex;
+  justify-content: space-around;
+  align-items: flex-start;
+  background: #0d0f14;
+  padding: 12px 8px 24px;
+  color: #fff;
+  font-size: 14px;
+  position: relative;
+}
+
+/* D-pad cluster */
+.dpad {
+  width: 120px;
+  height: 120px;
+  position: relative;
+  touch-action: none;
+}
+
+.dpad-btn {
+  position: absolute;
+  width: 40px;
+  height: 40px;
+  background: rgba(68,68,68,0.6);
+  border: 2px solid #fff;
+  border-radius: 6px;
+  color: #fff;
+  font-size: 16px;
+  line-height: 36px;
+  text-align: center;
+  user-select: none;
+  touch-action: none;
+}
+
+.dpad-up    { left: 40px; top: 0px;    }
+.dpad-left  { left: 0px;  top: 40px;   }
+.dpad-down  { left: 40px; top: 80px;   }
+.dpad-right { left: 80px; top: 40px;   }
+
+/* Action button cluster */
+.action-area {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  font-size: 11px;
+  color: #aaa;
+  text-align: center;
+  gap: 8px;
+}
+
+.action-hint {
+  line-height: 1.2;
+  text-align: center;
+}
+
+.action-btn {
+  width: 60px;
+  height: 60px;
+  background: rgba(34,34,34,0.6);
+  border: 2px solid #fff;
+  border-radius: 50%;
+  color: #fff;
+  font-size: 20px;
+  font-weight: bold;
+  line-height: 56px;
+  text-align: center;
+  user-select: none;
+  touch-action: none;
+}
+
+/* Desktop polish: widen canvas holder a bit */
+@media (min-width: 768px) {
+  #game-canvas-holder {
+    max-width: 640px;
+    aspect-ratio: 4 / 3;
+  }
+}

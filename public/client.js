@@ -1,26 +1,46 @@
 /* global Phaser */
 
+// --------------------------------------------------
+// DOM refs
+// --------------------------------------------------
+const holderEl = document.getElementById("game-canvas-holder");
+const winBannerEl = document.getElementById("win-banner");
+
+const hudScoreEl = document.getElementById("hud-score");
+const hudExitHintEl = document.getElementById("hud-exit-hint");
+const invListEl = document.getElementById("inv-list");
+
+const radarBoxEl = document.getElementById("radar-box");
+const radarIntelEl = document.getElementById("radar-intel");
+const radarKeyEl = document.getElementById("radar-key");
+const radarTrapkitEl = document.getElementById("radar-trapkit");
+
+const dpadEl = document.getElementById("dpad");
+const actionBtnEl = document.getElementById("action-btn");
+
+// --------------------------------------------------
+// Canvas size taken from holder
+// --------------------------------------------------
+const VIEW_W = holderEl.clientWidth || 480;
+const VIEW_H = holderEl.clientHeight || 360;
+
+// crude mobile detection
+const IS_MOBILE = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
+
+// --------------------------------------------------
+// Networking
+// --------------------------------------------------
 const WS_URL = (typeof location !== "undefined" && location.origin)
   ? location.origin.replace(/^http/, "ws")
   : "ws://localhost:3000";
-
-const VIEW_W_DESKTOP = 900;
-const VIEW_H_DESKTOP = 600;
-
-let VIEW_W = VIEW_W_DESKTOP;
-let VIEW_H = VIEW_H_DESKTOP;
-
-// crude mobile check for layout tweaks
-const IS_MOBILE = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
-if (IS_MOBILE) {
-  VIEW_W = window.innerWidth;
-  VIEW_H = window.innerHeight;
-}
 
 let ws;
 let myId = null;
 let seq = 0;
 
+// --------------------------------------------------
+// Latest snapshot from server
+// --------------------------------------------------
 let latest = {
   room: null,
   roomW: 320,
@@ -36,16 +56,20 @@ let latest = {
   youScore: 0,
   scoreTarget: 5,
 
-  intelLocation: null,     // NEW
-  keyLocation: null,       // NEW
-  trapKitLocation: null    // NEW
+  intelLocation: null,
+  keyLocation: null,
+  trapKitLocation: null
 };
 
-const renderPlayers = new Map(); // id -> { gfx, nameText, alertText, x, y }
-let sceneRef = null;
+// for local input state on mobile dpad
+let dirInput = { up:false, down:false, left:false, right:false };
 
+// --------------------------------------------------
+// Phaser game instance
+// --------------------------------------------------
 const game = new Phaser.Game({
   type: Phaser.AUTO,
+  parent: "game-canvas-holder", // IMPORTANT: attach canvas to the holder div
   backgroundColor: "#0d0f14",
   scale: {
     width: VIEW_W,
@@ -56,24 +80,29 @@ const game = new Phaser.Game({
   scene: { create, update }
 });
 
+// We'll store layers & refs in closure so update() can reach them
+let sceneRef = null;
+const renderPlayers = new Map(); // id -> { gfx, nameText, alertText, x, y }
+
+// --------------------------------------------------
+// Phaser scene: create()
+// --------------------------------------------------
 function create() {
   const scene = this;
   sceneRef = scene;
 
-  // Layers
+  // layers for drawing
   scene.roomLayer = scene.add.layer();
   scene.doorLayer = scene.add.layer();
   scene.itemLayer = scene.add.layer();
   scene.trapLayer = scene.add.layer();
   scene.playerLayer = scene.add.layer();
-  scene.uiLayer = scene.add.layer();
-  scene.winLayer = scene.add.layer();
 
-  // Input
+  // keyboard input (desktop)
   scene.cursors = scene.input.keyboard.createCursorKeys();
-  scene.keys = scene.input.keyboard.addKeys("W,A,S,D,E,SPACE,T,F"); // NEW: F for useItem
+  scene.keys = scene.input.keyboard.addKeys("W,A,S,D,E,SPACE,T,F");
 
-  // WS
+  // WebSocket setup
   ws = new WebSocket(WS_URL);
 
   ws.onopen = () => {
@@ -91,63 +120,71 @@ function create() {
 
     if (m.t === "snapshot") {
       latest = m;
+      // draw world in Phaser
       drawRoom(scene, latest);
-      drawInventory(scene, latest);
-      drawWinner(scene, latest.winner);
+
+      // update HUD DOM
+      updateHUD(latest);
+
+      // update win banner DOM
+      updateWinBanner(latest.winner);
     }
   };
 
   ws.onerror = (err) => console.warn("[client] ws error", err);
   ws.onclose  = () => console.warn("[client] ws closed");
 
-  // --- MOBILE CONTROLS ---
-  // We'll create virtual controls on mobile only.
+  // touch controls (mobile only)
   if (IS_MOBILE) {
-    setupMobileControls(scene);
+    setupMobileDpad();
+    setupMobileActionButton();
   }
 }
 
+// --------------------------------------------------
+// Phaser scene: update()
+// --------------------------------------------------
 function update(time, delta) {
   const scene = this;
   const dt = delta / 1000;
 
-  // Movement input
+  // figure out directional input
   let dx = 0, dy = 0;
 
-  // keyboard movement
-  if (scene.cursors.left.isDown || scene.keys.A.isDown) dx -= 1;
-  if (scene.cursors.right.isDown || scene.keys.D.isDown) dx += 1;
-  if (scene.cursors.up.isDown || scene.keys.W.isDown) dy -= 1;
-  if (scene.cursors.down.isDown || scene.keys.S.isDown) dy += 1;
-
-  // mobile joystick adds to dx/dy if present
-  if (IS_MOBILE && scene.joyVec) {
-    dx += scene.joyVec.x;
-    dy += scene.joyVec.y;
+  // desktop keys
+  if (!IS_MOBILE) {
+    if (scene.cursors.left.isDown || scene.keys.A.isDown) dx -= 1;
+    if (scene.cursors.right.isDown || scene.keys.D.isDown) dx += 1;
+    if (scene.cursors.up.isDown || scene.keys.W.isDown) dy -= 1;
+    if (scene.cursors.down.isDown || scene.keys.S.isDown) dy += 1;
   }
 
+  // mobile dpad
+  if (IS_MOBILE) {
+    if (dirInput.left) dx -= 1;
+    if (dirInput.right) dx += 1;
+    if (dirInput.up) dy -= 1;
+    if (dirInput.down) dy += 1;
+  }
+
+  // send movement
   seq++;
   if (ws && ws.readyState === 1) {
     ws.send(JSON.stringify({ t: "input", seq, dx, dy }));
   }
 
-  // Desktop: Pickup item (E / SPACE)
+  // desktop-only actions:
   if (!IS_MOBILE) {
-    if ((scene.keys.SPACE.isDown || scene.keys.E.isDown) && ws && ws.readyState === 1) {
+    // tap pickup
+    if ((scene.keys.SPACE.isDown || scene.keys.E.isDown) && ws.readyState === 1) {
       ws.send(JSON.stringify({ t: "pickup" }));
     }
-  }
-
-  // Desktop: Place trap (T)
-  if (!IS_MOBILE) {
-    if (scene.keys.T.isDown && ws && ws.readyState === 1) {
+    // place trap
+    if (scene.keys.T.isDown && ws.readyState === 1) {
       ws.send(JSON.stringify({ t: "placeTrap" }));
     }
-  }
-
-  // Desktop: Use item (F)  // NEW
-  if (!IS_MOBILE) {
-    if (scene.keys.F.isDown && ws && ws.readyState === 1) {
+    // use item (disguise/map/spring)
+    if (scene.keys.F.isDown && ws.readyState === 1) {
       ws.send(JSON.stringify({ t: "useItem" }));
     }
   }
@@ -157,7 +194,6 @@ function update(time, delta) {
   (latest.players || []).forEach(p => {
     const rp = ensurePlayer(scene, p.id);
 
-    // stunned?
     const stunned = p.isStunned;
     const radius = stunned ? 12 : 8;
 
@@ -169,7 +205,7 @@ function update(time, delta) {
     rp.y = Phaser.Math.Linear(rp.y, sy, 0.4);
     rp.gfx.setPosition(rp.x, rp.y);
 
-    // nameplate (shortId)
+    // Nameplate (shortId)
     if (!rp.nameText) {
       rp.nameText = scene.add.text(
         rp.x,
@@ -182,7 +218,7 @@ function update(time, delta) {
     rp.nameText.setText(p.shortId || "??");
     rp.nameText.setPosition(rp.x, rp.y - radius - 14);
 
-    // alert text (!! when stunned)
+    // "!!" if stunned
     if (stunned && p.stunMsRemaining > 0) {
       if (!rp.alertText) {
         rp.alertText = scene.add.text(
@@ -204,7 +240,7 @@ function update(time, delta) {
     seen.add(p.id);
   });
 
-  // Cleanup players that vanished
+  // cleanup missing players
   for (const [id, rp] of renderPlayers.entries()) {
     if (!seen.has(id)) {
       if (rp.alertText) rp.alertText.destroy();
@@ -215,89 +251,9 @@ function update(time, delta) {
   }
 }
 
-// -----------------------------------------------------
-// Mobile controls setup
-// -----------------------------------------------------
-function setupMobileControls(scene) {
-  // super lightweight touch joystick + buttons
-
-  scene.joyVec = { x: 0, y: 0 };
-
-  // Virtual joystick area (bottom left)
-  const joyBase = scene.add.circle(80, VIEW_H - 100, 40, 0x444444, 0.4)
-    .setScrollFactor(0)
-    .setInteractive({ draggable: true });
-  const joyKnob = scene.add.circle(80, VIEW_H - 100, 20, 0xffffff, 0.6)
-    .setScrollFactor(0);
-
-  joyBase.on('drag', (pointer, dragX, dragY) => {
-    // clamp knob to radius ~40
-    const dx = dragX - 80;
-    const dy = dragY - (VIEW_H - 100);
-    const mag = Math.hypot(dx, dy) || 1;
-    const norm = Math.min(mag, 40);
-    const nx = (dx / mag) * norm;
-    const ny = (dy / mag) * norm;
-    joyKnob.x = 80 + nx;
-    joyKnob.y = (VIEW_H - 100) + ny;
-
-    // normalised for movement input
-    scene.joyVec.x = nx / 40;
-    scene.joyVec.y = ny / 40;
-  });
-
-  joyBase.on('dragend', () => {
-    scene.joyVec.x = 0;
-    scene.joyVec.y = 0;
-    joyKnob.x = 80;
-    joyKnob.y = VIEW_H - 100;
-  });
-
-  // Buttons on bottom right:
-  // PICK (pickup), TRAP (place), USE (useItem)
-  const btnY = VIEW_H - 90;
-  const spacing = 60;
-  const startX = VIEW_W - 60;
-
-  function makeBtn(label, offsetX, onTap) {
-    const x = startX - offsetX;
-    const bg = scene.add.rectangle(x, btnY, 50, 50, 0x222222, 0.6)
-      .setStrokeStyle(2, 0xffffff)
-      .setScrollFactor(0)
-      .setInteractive({ useHandCursor: true })
-      .on("pointerdown", onTap);
-    const txt = scene.add.text(
-      x, btnY,
-      label,
-      { fontSize: "10px", color: "#ffffff", align: "center" }
-    ).setOrigin(0.5);
-    scene.uiLayer.add(bg);
-    scene.uiLayer.add(txt);
-  }
-
-  makeBtn("PICK", 0, () => {
-    if (ws && ws.readyState === 1) {
-      ws.send(JSON.stringify({ t: "pickup" }));
-    }
-  });
-
-  makeBtn("TRAP", spacing, () => {
-    if (ws && ws.readyState === 1) {
-      ws.send(JSON.stringify({ t: "placeTrap" }));
-    }
-  });
-
-  // NEW: USE button
-  makeBtn("USE", spacing * 2, () => {
-    if (ws && ws.readyState === 1) {
-      ws.send(JSON.stringify({ t: "useItem" }));
-    }
-  });
-}
-
-// -----------------------------------------------------
-// Draw room / doors / items / traps
-// -----------------------------------------------------
+// --------------------------------------------------
+// Draw room, doors, items, traps inside Phaser canvas
+// --------------------------------------------------
 function drawRoom(scene, snap) {
   scene.roomLayer.removeAll(true);
   scene.doorLayer.removeAll(true);
@@ -306,7 +262,7 @@ function drawRoom(scene, snap) {
 
   const { roomX, roomY, roomW, roomH } = getRoomScreenBox(snap.roomW, snap.roomH);
 
-  // background
+  // background box
   const roomGfx = scene.add.graphics();
   roomGfx.fillStyle(0x1e2535, 1);
   roomGfx.fillRect(roomX, roomY, roomW, roomH);
@@ -323,7 +279,7 @@ function drawRoom(scene, snap) {
   ).setOrigin(0.5, 0);
   scene.roomLayer.add(title);
 
-  // doors (yellow)
+  // draw doors (yellow)
   (snap.doors || []).forEach(d => {
     const { sx, sy } = roomToScreen(d.x, d.y, snap.roomW, snap.roomH);
     const { sx: sx2, sy: sy2 } = roomToScreen(d.x + d.w, d.y + d.h, snap.roomW, snap.roomH);
@@ -342,7 +298,7 @@ function drawRoom(scene, snap) {
     scene.doorLayer.add(doorLabel);
   });
 
-  // items (green)
+  // draw items (green)
   (snap.items || []).forEach(it => {
     const { sx, sy } = roomToScreen(it.x, it.y, snap.roomW, snap.roomH);
 
@@ -364,8 +320,8 @@ function drawRoom(scene, snap) {
     scene.itemLayer.add(labelText);
   });
 
-  // visible traps YOU placed (red squares)
-  ;(snap.traps || []).forEach(tr => {
+  // draw traps that YOU placed (red squares w/ "T")
+  (snap.traps || []).forEach(tr => {
     const { sx, sy } = roomToScreen(tr.x, tr.y, snap.roomW, snap.roomH);
 
     const size = 24;
@@ -386,152 +342,70 @@ function drawRoom(scene, snap) {
   });
 }
 
-// -----------------------------------------------------
-// HUD / Inventory / Radar
-// -----------------------------------------------------
-function drawInventory(scene, snap) {
-  scene.uiLayer.removeAll(true);
+// --------------------------------------------------
+// HUD DOM updater
+// --------------------------------------------------
+function updateHUD(snap) {
+  // score / target
+  hudScoreEl.textContent = `SCORE: ${snap.youScore} / ${snap.scoreTarget}`;
 
-  // HUD box bg
-  // On mobile, we leave gameplay at top and stack HUD and controls below,
-  // but we're already drawing buttons in setupMobileControls, so here
-  // we just draw HUD near upper/middle-ish.
-  const padX = 8;
-  const padY = IS_MOBILE ? (VIEW_H * 0.4) : (VIEW_H - 8 - 80);
-  const w = IS_MOBILE ? Math.min(VIEW_W - 16, 260) : 260;
-  const h = 80;
-
-  const bg = scene.add.graphics();
-  bg.fillStyle(0x000000, 0.6);
-  bg.fillRect(padX, padY, w, h);
-  bg.lineStyle(1, 0xffffff, 0.8);
-  bg.strokeRect(padX, padY, w, h);
-  scene.uiLayer.add(bg);
-
-  // top line: score
-  const scoreLine = scene.add.text(
-    padX + 6,
-    padY + 4,
-    `SCORE ${snap.youScore} / ${snap.scoreTarget}`,
-    { fontSize: "10px", color: "#ffffff" }
-  );
-  scene.uiLayer.add(scoreLine);
-
-  // inventory header
-  const invHeader = scene.add.text(
-    padX + 6,
-    padY + 18,
-    "INV  (PICK:E/SPACE  TRAP:T  USE:F)",
-    { fontSize: "10px", color: "#ffffff" }
-  );
-  scene.uiLayer.add(invHeader);
+  // exit hint on/off
+  const hasIntel = snap.yourInventory?.some(it => it.label === "INTEL" || it.id === "brief");
+  const hasKey = snap.yourInventory?.some(it => it.label === "KEY" || it.id === "key");
+  if (hasIntel && hasKey) {
+    hudExitHintEl.style.display = "block";
+  } else {
+    hudExitHintEl.style.display = "none";
+  }
 
   // inventory list
+  invListEl.innerHTML = "";
   if (!snap.yourInventory || !snap.yourInventory.length) {
-    const empty = scene.add.text(
-      padX + 6,
-      padY + 32,
-      "(empty)",
-      { fontSize: "10px", color: "#aaaaaa" }
-    );
-    scene.uiLayer.add(empty);
+    const span = document.createElement("span");
+    span.className = "empty";
+    span.textContent = "(empty)";
+    invListEl.appendChild(span);
   } else {
-    snap.yourInventory.forEach((it, idx) => {
-      const line = scene.add.text(
-        padX + 6,
-        padY + 32 + idx * 12,
-        `- ${it.label}`,
-        { fontSize: "10px", color: "#ffffff" }
-      );
-      scene.uiLayer.add(line);
+    snap.yourInventory.forEach(it => {
+      const line = document.createElement("div");
+      line.textContent = "- " + it.label;
+      invListEl.appendChild(line);
     });
   }
 
-  // Radar intel (if present)
-  // We'll just list rooms where key/intel/trap kit are seen.
-  let radarY = padY + h + 4;
-  if (snap.intelLocation || snap.keyLocation || snap.trapKitLocation) {
-    const box2 = scene.add.graphics();
-    const rw = w;
-    const rh = 50;
-    box2.fillStyle(0x000000, 0.6);
-    box2.fillRect(padX, radarY, rw, rh);
-    box2.lineStyle(1, 0x33ff33, 0.8);
-    box2.strokeRect(padX, radarY, rw, rh);
-    scene.uiLayer.add(box2);
+  // radar info (only shown if any field is non-null)
+  const intelRoom = snap.intelLocation?.room;
+  const keyRoom = snap.keyLocation?.room;
+  const trapRoom = snap.trapKitLocation?.room;
 
-    const radarHeader = scene.add.text(
-      padX + 6,
-      radarY + 4,
-      "RADAR",
-      { fontSize: "10px", color: "#33ff33" }
-    );
-    scene.uiLayer.add(radarHeader);
-
-    const intelRoom = snap.intelLocation ? snap.intelLocation.room : "?";
-    const keyRoom = snap.keyLocation ? snap.keyLocation.room : "?";
-    const trapRoom = snap.trapKitLocation ? snap.trapKitLocation.room : "?";
-
-    const intelLine = scene.add.text(
-      padX + 6,
-      radarY + 18,
-      `INTEL: ${intelRoom}`,
-      { fontSize: "10px", color: "#ffffff" }
-    );
-    const keyLine = scene.add.text(
-      padX + 100,
-      radarY + 18,
-      `KEY: ${keyRoom}`,
-      { fontSize: "10px", color: "#ffffff" }
-    );
-    const trapLine = scene.add.text(
-      padX + 6,
-      radarY + 32,
-      `TRAP KIT: ${trapRoom}`,
-      { fontSize: "10px", color: "#ffffff" }
-    );
-
-    scene.uiLayer.add(intelLine);
-    scene.uiLayer.add(keyLine);
-    scene.uiLayer.add(trapLine);
+  if (intelRoom || keyRoom || trapRoom) {
+    radarBoxEl.style.display = "block";
+    radarIntelEl.textContent = "INTEL: " + (intelRoom || "?");
+    radarKeyEl.textContent = "KEY: " + (keyRoom || "?");
+    radarTrapkitEl.textContent = "TRAP KIT: " + (trapRoom || "?");
+  } else {
+    radarBoxEl.style.display = "none";
   }
 }
 
-// -----------------------------------------------------
-// Winner banner
-// -----------------------------------------------------
-function drawWinner(scene, winner) {
-  scene.winLayer.removeAll(true);
-  if (!winner) return;
-
+// --------------------------------------------------
+// Winner banner DOM updater
+// --------------------------------------------------
+function updateWinBanner(winner) {
+  if (!winner) {
+    winBannerEl.style.display = "none";
+    return;
+  }
   const textStr = (winner.id === myId)
     ? "YOU ESCAPED!"
-    : "WINNER: " + winner.id.slice(0, 4);
-
-  const bw = VIEW_W * 0.8;
-  const bh = 60;
-  const bx = (VIEW_W - bw) / 2;
-  const by = (VIEW_H - bh) / 2;
-
-  const g = scene.add.graphics();
-  g.fillStyle(0x000000, 0.8);
-  g.fillRect(bx, by, bw, bh);
-  g.lineStyle(2, 0xffcc33, 1);
-  g.strokeRect(bx, by, bw, bh);
-  scene.winLayer.add(g);
-
-  const t = scene.add.text(
-    bx + bw / 2,
-    by + bh / 2,
-    textStr,
-    { fontSize: "16px", color: "#ffcc33" }
-  ).setOrigin(0.5);
-  scene.winLayer.add(t);
+    : "WINNER: " + winner.id.slice(0, 4).toUpperCase();
+  winBannerEl.textContent = textStr;
+  winBannerEl.style.display = "block";
 }
 
-// -----------------------------------------------------
-// Player entity helpers
-// -----------------------------------------------------
+// --------------------------------------------------
+// Player render helpers
+// --------------------------------------------------
 function ensurePlayer(scene, id) {
   if (renderPlayers.has(id)) return renderPlayers.get(id);
 
@@ -558,20 +432,21 @@ function tintPlayerCircle(gfx, colorHexStr, radiusPx) {
   gfx.fillCircle(0, 0, radiusPx);
 }
 
-// -----------------------------------------------------
-// Room/screen coord math
-// -----------------------------------------------------
+// --------------------------------------------------
+// Coords helpers
+// --------------------------------------------------
 function getRoomScreenBox(roomW, roomH) {
-  const maxW = VIEW_W * 0.8;
-  const maxH = VIEW_H * 0.5; // slightly shallower so HUD fits on mobile
+  // We try to keep room view near top of the canvas, with some margin
+  const maxW = VIEW_W * 0.9;
+  const maxH = VIEW_H * 0.8;
   const scale = Math.min(maxW / roomW, maxH / roomH);
 
   const drawnW = roomW * scale;
   const drawnH = roomH * scale;
 
-  // gameplay area sits near top on mobile
+  // offset near top-middle
   const offX = (VIEW_W - drawnW) / 2;
-  const offY = IS_MOBILE ? 20 : (VIEW_H - drawnH) / 2;
+  const offY = 16;
 
   return {
     roomX: offX,
@@ -588,4 +463,122 @@ function roomToScreen(x, y, roomW, roomH) {
     sx: roomX + x * scale,
     sy: roomY + y * scale
   };
+}
+
+// --------------------------------------------------
+// Mobile controls implementation
+// --------------------------------------------------
+function setupMobileDpad() {
+  // We'll listen to touchstart/touchend on each .dpad-btn
+  // and set dirInput flags accordingly.
+
+  if (!dpadEl) return;
+
+  const btns = dpadEl.querySelectorAll(".dpad-btn");
+  btns.forEach(btn => {
+    const dir = btn.getAttribute("data-dir");
+    btn.addEventListener("touchstart", (ev) => {
+      ev.preventDefault();
+      setDir(dir, true);
+    }, { passive:false });
+    btn.addEventListener("touchend", (ev) => {
+      ev.preventDefault();
+      setDir(dir, false);
+    }, { passive:false });
+    btn.addEventListener("touchcancel", (ev) => {
+      ev.preventDefault();
+      setDir(dir, false);
+    }, { passive:false });
+  });
+
+  function setDir(dir, val) {
+    if (dir === "up") dirInput.up = val;
+    if (dir === "down") dirInput.down = val;
+    if (dir === "left") dirInput.left = val;
+    if (dir === "right") dirInput.right = val;
+  }
+}
+
+// mobile action button behavior:
+// - quick tap  => pickup
+// - long press => placeTrap
+// - double tap => useItem
+function setupMobileActionButton() {
+  if (!actionBtnEl) return;
+
+  let tapTimer = null;
+  let pressStart = 0;
+  let lastTapTime = 0;
+
+  // helper sends
+  function sendPickup() {
+    if (ws && ws.readyState === 1) {
+      ws.send(JSON.stringify({ t: "pickup" }));
+    }
+  }
+  function sendTrap() {
+    if (ws && ws.readyState === 1) {
+      ws.send(JSON.stringify({ t: "placeTrap" }));
+    }
+  }
+  function sendUse() {
+    if (ws && ws.readyState === 1) {
+      ws.send(JSON.stringify({ t: "useItem" }));
+    }
+  }
+
+  actionBtnEl.addEventListener("touchstart", (ev) => {
+    ev.preventDefault();
+    const nowMs = performance.now();
+    pressStart = nowMs;
+
+    // check double-tap window (e.g. within 250ms)
+    if (nowMs - lastTapTime < 250) {
+      // interpret as USE ITEM
+      sendUse();
+      // reset so we don't also run pickup
+      lastTapTime = 0;
+      if (tapTimer) {
+        clearTimeout(tapTimer);
+        tapTimer = null;
+      }
+    } else {
+      // not yet sure if tap or hold, we set/refresh the timer
+      lastTapTime = nowMs;
+      tapTimer = setTimeout(() => {
+        tapTimer = null;
+        // if still holding after 400ms => TRAP
+        const heldFor = performance.now() - pressStart;
+        if (heldFor >= 400) {
+          sendTrap();
+        }
+      }, 400);
+    }
+  }, { passive:false });
+
+  actionBtnEl.addEventListener("touchend", (ev) => {
+    ev.preventDefault();
+    const heldFor = performance.now() - pressStart;
+
+    // If we released before 400ms and we didn't already double tap => PICKUP
+    if (heldFor < 400) {
+      // but only if we didn't consume it as double tap (we zero lastTapTime on double)
+      if (lastTapTime !== 0 && tapTimer) {
+        sendPickup();
+      }
+    }
+
+    if (tapTimer) {
+      clearTimeout(tapTimer);
+      tapTimer = null;
+    }
+  }, { passive:false });
+
+  actionBtnEl.addEventListener("touchcancel", (ev) => {
+    ev.preventDefault();
+    if (tapTimer) {
+      clearTimeout(tapTimer);
+      tapTimer = null;
+    }
+  }, { passive:false });
 }
