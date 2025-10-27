@@ -18,15 +18,15 @@ const STUN_MS = 2000;       // trap stun
 const TRIGGER_RADIUS = 32;  // trap radius
 const PICK_RADIUS = 20;     // pickup distance
 const WIN_RADIUS = 24;      // distance to exit pad to escape
-const ROUND_END_FREEZE_MS = 3000; // freeze/celebrate before reset
-const SCORE_PER_WIN = 1;    // how much you get for escaping
-const SCORE_TARGET = 5;     // first to this wins overall (future use)
+const ROUND_END_FREEZE_MS = 3000; // pause before new round
+const SCORE_PER_WIN = 1;
+const SCORE_TARGET = 5;
 
 // --------------------------------------------------
 function now() { return Date.now(); }
 
 // --------------------------------------------------
-// ROOM TEMPLATES (static "blueprint" for reset)
+// ROOM TEMPLATES
 // --------------------------------------------------
 const ROOM_TEMPLATES = {
   ARMORY: {
@@ -68,6 +68,7 @@ const ROOM_TEMPLATES = {
   WORKSHOP: {
     w: 320, h: 200,
     items: [
+      // note: trap kit will get randomized later on pickup too
       { id: "paint", x:80,  y:60,  label:"DISGUISE" },
       { id: "trap",  x:200, y:120, label:"TRAP KIT" }
     ],
@@ -88,63 +89,81 @@ const ROOM_TEMPLATES = {
 };
 
 // --------------------------------------------------
+// SPAWN POINTS FOR PLAYERS
+// --------------------------------------------------
+const SPAWNS = [
+  { room: "CONTROL",  x:160, y:100 },
+  { room: "ARMORY",   x:200, y:120 },
+  { room: "INTEL",    x:80,  y:140 },
+  { room: "WORKSHOP", x:260, y:100 }
+];
+
+function randSpawn() {
+  const base = SPAWNS[Math.floor(Math.random() * SPAWNS.length)];
+  // jitter a bit so 2 people don't stack perfectly
+  const jitterX = (Math.random() * 20 - 10); // -10..+10
+  const jitterY = (Math.random() * 20 - 10);
+  return {
+    room: base.room,
+    x: base.x + jitterX,
+    y: base.y + jitterY
+  };
+}
+
+// --------------------------------------------------
+// RANDOM TRAP KIT SPAWNS (inside WORKSHOP)
+// --------------------------------------------------
+const TRAP_SPAWN_SPOTS = [
+  { x: 60,  y: 60  },
+  { x: 200, y: 120 },
+  { x: 260, y: 150 },
+  { x: 140, y: 100 }
+];
+
+function randomTrapSpot() {
+  return TRAP_SPAWN_SPOTS[
+    Math.floor(Math.random() * TRAP_SPAWN_SPOTS.length)
+  ];
+}
+
+// --------------------------------------------------
 // GLOBAL RUNTIME STATE
 // --------------------------------------------------
 const STATE = {
   tick: 0,
   players: new Map(),    // id -> player
-  roomItems: {},         // live items per room
-  roomTraps: {},         // live traps per room
-  roundOver: false,      // are we in the post-win freeze?
-  winner: null,          // { id, type } once someone wins a round
-  roundResetAt: 0        // timestamp when we should reset round
+  roomItems: {},         // live items per roomName -> [{id,x,y,label}, ...]
+  roomTraps: {},         // roomName -> [{id,x,y,owner,armed}, ...]
+  roundOver: false,
+  winner: null,          // { id, type }
+  roundResetAt: 0
 };
 
-// initialize per-room live state (items, traps)
-function resetRooms() {
-  STATE.roomItems = {};
-  STATE.roomTraps = {};
-  for (const roomName of Object.keys(ROOM_TEMPLATES)) {
-    const tmpl = ROOM_TEMPLATES[roomName];
-    STATE.roomItems[roomName] = tmpl.items.map(it => ({ ...it }));
-    STATE.roomTraps[roomName] = [];
-  }
-}
-
-// initial fill
 resetRooms();
 
 // --------------------------------------------------
-// Helpers
+// Initial room state / round reset helpers
 // --------------------------------------------------
+function resetRooms() {
+  STATE.roomItems = {};
+  STATE.roomTraps = {};
 
-function spawnPos() {
-  return {
-    room: "CONTROL",
-    x: 160,
-    y: 100
-  };
+  for (const roomName of Object.keys(ROOM_TEMPLATES)) {
+    const tmpl = ROOM_TEMPLATES[roomName];
+    // deep copy items
+    STATE.roomItems[roomName] = tmpl.items.map(it => ({ ...it }));
+    STATE.roomTraps[roomName] = [];
+  }
+
+  // we keep trap kit initially where template says.
+  // after pickup we will respawn it somewhere random.
 }
 
-function randColor() {
-  const palette = [
-    "#ff5555",
-    "#55ff55",
-    "#5599ff",
-    "#ffff55",
-    "#ff55ff",
-    "#55ffff",
-    "#ffffff"
-  ];
-  return palette[Math.floor(Math.random() * palette.length)];
-}
-
-// wipe player for new round but keep their score/color
 function respawnPlayer(p) {
-  const start = spawnPos();
-  p.room = start.room;
-  p.x = start.x;
-  p.y = start.y;
+  const s = randSpawn();
+  p.room = s.room;
+  p.x = s.x;
+  p.y = s.y;
   p.vx = 0;
   p.vy = 0;
   p.lastSeq = 0;
@@ -158,25 +177,25 @@ function respawnPlayer(p) {
 // --------------------------------------------------
 wss.on("connection", (ws) => {
   const id = crypto.randomUUID();
-  const start = spawnPos();
+  const s = randSpawn();
 
   const player = {
     id,
     shortId: id.slice(0,4),
-    room: start.room,
-    x: start.x,
-    y: start.y,
+    room: s.room,
+    x: s.x,
+    y: s.y,
     vx: 0,
     vy: 0,
     color: randColor(),
 
-    score: 0,          // persistent between rounds
+    score: 0,          // persists across rounds
 
     lastSeq: 0,
     lastHeard: now(),
 
-    inventory: [],     // [{id,label}]
-    stunnedUntil: 0,   // ms timestamp
+    inventory: [],
+    stunnedUntil: 0,
     _ws: ws
   };
 
@@ -193,10 +212,9 @@ wss.on("connection", (ws) => {
 
   ws.on("message", (buf) => {
     if (STATE.roundOver) {
-      // during roundOver we're frozen, ignore actions
+      // freeze during end-of-round
       return;
     }
-
     let m;
     try {
       m = JSON.parse(buf);
@@ -207,12 +225,10 @@ wss.on("connection", (ws) => {
     if (m.t === "input") {
       handleInput(player, m);
     }
-
     if (m.t === "pickup") {
       console.log(`[server] ${player.id} requests PICKUP`);
       handlePickup(player);
     }
-
     if (m.t === "placeTrap") {
       console.log(`[server] ${player.id} requests PLACE TRAP`);
       handlePlaceTrap(player);
@@ -226,9 +242,8 @@ wss.on("connection", (ws) => {
 });
 
 // --------------------------------------------------
-// Player input handlers
+// Input / Action
 // --------------------------------------------------
-
 function handleInput(player, m) {
   // stunned players can't move
   if (player.stunnedUntil > now()) {
@@ -249,7 +264,7 @@ function handleInput(player, m) {
   player.lastHeard = now();
 }
 
-// attempt pickup of closest item in room
+// pickup item in same room within PICK_RADIUS
 function handlePickup(player) {
   const roomName = player.room;
   const itemsInRoom = STATE.roomItems[roomName];
@@ -265,14 +280,42 @@ function handlePickup(player) {
       );
 
       player.inventory.push({ id: it.id, label: it.label });
+
+      // was it the TRAP KIT?
+      const pickedTrapKit = (it.id === "trap" || it.label === "TRAP KIT");
+
+      // remove from floor
       itemsInRoom.splice(i, 1);
+
+      // if TRAP KIT, immediately respawn a NEW trap kit somewhere else in WORKSHOP
+      if (pickedTrapKit) {
+        respawnTrapKitInWorkshop();
+      }
+
       break;
     }
   }
 }
 
-// place a trap if you have TRAP KIT
+// re-drop a trap kit in WORKSHOP at a random allowed spawn
+function respawnTrapKitInWorkshop() {
+  const workshopItems = STATE.roomItems["WORKSHOP"];
+  if (!workshopItems) return;
+
+  const spot = randomTrapSpot();
+  // push a NEW trap kit
+  workshopItems.push({
+    id: "trap",
+    label: "TRAP KIT",
+    x: spot.x,
+    y: spot.y
+  });
+
+  console.log(`[server] TRAP KIT respawned in WORKSHOP at (${spot.x},${spot.y})`);
+}
+
 function handlePlaceTrap(player) {
+  // check inventory for trap kit
   const trapIndex = player.inventory.findIndex(
     it => it.id === "trap" || it.label === "TRAP KIT"
   );
@@ -304,13 +347,12 @@ function handlePlaceTrap(player) {
 }
 
 // --------------------------------------------------
-// Simulation / step
+// Simulation
 // --------------------------------------------------
-
 function step(dt) {
   const tNow = now();
 
-  // If roundOver: freeze everybody totally
+  // if roundOver, lock everyone
   if (STATE.roundOver) {
     STATE.players.forEach((p) => {
       p.vx = 0;
@@ -319,22 +361,21 @@ function step(dt) {
   }
 
   STATE.players.forEach((p) => {
-    // regular movement if not stunned and not roundOver
+    // movement only if not stunned and not in round freeze
     if (!STATE.roundOver && p.stunnedUntil <= tNow) {
       p.x += p.vx * dt;
       p.y += p.vy * dt;
     } else {
-      // freeze
       p.vx = 0;
       p.vy = 0;
     }
 
-    // clamp in room
+    // clamp in room bounds
     const def = ROOM_TEMPLATES[p.room];
     p.x = Math.max(16, Math.min(def.w - 16, p.x));
     p.y = Math.max(16, Math.min(def.h - 16, p.y));
 
-    // door teleport (only if not stunned and not roundOver)
+    // door teleport
     if (!STATE.roundOver && p.stunnedUntil <= tNow) {
       for (const door of def.doors) {
         const inside =
@@ -342,7 +383,6 @@ function step(dt) {
           p.x < door.x + door.w &&
           p.y > door.y &&
           p.y < door.y + door.h;
-
         if (inside) {
           console.log(
             `[server] ${p.id} GOES THROUGH DOOR ${p.room} -> ${door.targetRoom}`
@@ -355,7 +395,6 @@ function step(dt) {
       }
     }
 
-    // trap check (after possible door change)
     if (!STATE.roundOver) {
       applyTrapIfHit(p, tNow);
     }
@@ -370,7 +409,7 @@ function step(dt) {
   STATE.tick++;
 }
 
-// trap collision
+// trap logic
 function applyTrapIfHit(player, tNow) {
   const roomName = player.room;
   const traps = STATE.roomTraps[roomName];
@@ -382,7 +421,6 @@ function applyTrapIfHit(player, tNow) {
 
     const dist = Math.hypot(player.x - tr.x, player.y - tr.y);
 
-    // debug-ish
     if (dist < TRIGGER_RADIUS * 2) {
       console.log(
         `[server] checking trap ${tr.id} vs player ${player.id} in ${roomName}: dist=${dist.toFixed(
@@ -391,7 +429,7 @@ function applyTrapIfHit(player, tNow) {
       );
     }
 
-    // don't trigger your own trap
+    // can't trigger your own trap
     if (player.id === tr.owner) {
       if (dist <= TRIGGER_RADIUS) {
         console.log(
@@ -401,7 +439,6 @@ function applyTrapIfHit(player, tNow) {
       continue;
     }
 
-    // trigger someone else's trap
     if (dist <= TRIGGER_RADIUS) {
       console.log(
         `[server] TRAP TRIGGERED ${tr.id} on player ${player.id} in ${roomName} at (${tr.x},${tr.y})`
@@ -414,7 +451,7 @@ function applyTrapIfHit(player, tNow) {
       player.vx = 0;
       player.vy = 0;
 
-      // remove trap
+      // remove the trap from room
       traps.splice(i, 1);
       break;
     }
@@ -422,39 +459,28 @@ function applyTrapIfHit(player, tNow) {
 }
 
 // --------------------------------------------------
-// Win / Round over / Reset
+// Winning / Round reset
 // --------------------------------------------------
-
-// check if someone satisfies escape condition
 function checkWinCondition() {
-  // already handled in roundOver
   if (STATE.roundOver) return;
 
-  const tNow = now();
-
   STATE.players.forEach((p) => {
-    // Win path 1: Escape (has INTEL+KEY and stands on EXIT PAD)
     if (canEscape(p)) {
       console.log(`[server] WINNER (escape) IS ${p.id}`);
 
-      // award score
+      // give score
       p.score += SCORE_PER_WIN;
 
       startRoundOver(p.id, "escape");
       return;
     }
 
-    // Win path 2: Score race (optional future):
-    // if (p.score >= SCORE_TARGET) {
-    //   console.log(`[server] WINNER (score) IS ${p.id}`);
-    //   startRoundOver(p.id, "score");
-    // }
+    // future: score race
+    // if (p.score >= SCORE_TARGET) { ... }
   });
 }
 
-// helper: does player meet escape condition right now?
 function canEscape(p) {
-  // need intel + key
   const hasIntel = p.inventory.some(
     it => it.id === "brief" || it.label === "INTEL"
   );
@@ -463,8 +489,8 @@ function canEscape(p) {
   );
   if (!(hasIntel && hasKey)) return false;
 
-  // must be in EXIT room near EXIT PAD
   if (p.room !== "EXIT") return false;
+
   const exitAnchor = ROOM_TEMPLATES.EXIT.items.find(
     it => it.id === "escape"
   );
@@ -474,36 +500,33 @@ function canEscape(p) {
   return distToExit <= WIN_RADIUS;
 }
 
-// mark round as over, freeze players, schedule reset
 function startRoundOver(winnerId, type) {
   STATE.roundOver = true;
   STATE.winner = { id: winnerId, type };
   STATE.roundResetAt = now() + ROUND_END_FREEZE_MS;
 
-  // hard-freeze everyone immediately
+  // freeze everyone, visually stun them until reset
   STATE.players.forEach((p) => {
     p.vx = 0;
     p.vy = 0;
-    // also "stun" for visuals client-side
     p.stunnedUntil = STATE.roundResetAt;
   });
 }
 
-// after freeze time, reset round
 function maybeResetRound() {
   const tNow = now();
   if (!STATE.roundOver) return;
   if (tNow < STATE.roundResetAt) return;
 
-  // 1. reset rooms (items respawn, traps cleared)
+  // reset items/traps
   resetRooms();
 
-  // 2. respawn players but KEEP score/color
+  // respawn every player, KEEP score/color
   STATE.players.forEach((p) => {
     respawnPlayer(p);
   });
 
-  // 3. clear roundOver
+  // clear roundOver state
   STATE.roundOver = false;
   STATE.winner = null;
   STATE.roundResetAt = 0;
@@ -512,7 +535,7 @@ function maybeResetRound() {
 }
 
 // --------------------------------------------------
-// Snapshot per player -> send to that player only
+// Snapshot
 // --------------------------------------------------
 function snapshotFor(playerId) {
   const me = STATE.players.get(playerId);
@@ -522,11 +545,10 @@ function snapshotFor(playerId) {
   const roomDef = ROOM_TEMPLATES[roomName];
   const tNow = now();
 
-  // items in YOUR current room
   const itemsInRoom = STATE.roomItems[roomName] || [];
-  // traps in YOUR current room
-  // IMPORTANT: we only send traps that YOU own so other players can't see them
   const allTrapsInRoom = STATE.roomTraps[roomName] || [];
+
+  // only send traps you own (invisibility to others)
   const visibleTraps = allTrapsInRoom
     .filter(tr => tr.owner === me.id)
     .map(tr => ({
@@ -536,7 +558,7 @@ function snapshotFor(playerId) {
       owner: tr.owner
     }));
 
-  // players in your room
+  // players in same room
   const visiblePlayers = [];
   STATE.players.forEach((p) => {
     if (p.room === roomName) {
@@ -597,10 +619,8 @@ function snapshotFor(playerId) {
 function sendSnapshot(ws) {
   const player = [...STATE.players.values()].find(p => p._ws === ws);
   if (!player) return;
-
   const payload = snapshotFor(player.id);
   if (!payload) return;
-
   if (ws.readyState === 1) {
     ws.send(JSON.stringify(payload));
   }
@@ -630,6 +650,20 @@ setInterval(() => {
   step(dt);
   broadcastSnapshots();
 }, 1000 / TICK_HZ);
+
+// --------------------------------------------------
+function randColor() {
+  const palette = [
+    "#ff5555",
+    "#55ff55",
+    "#5599ff",
+    "#ffff55",
+    "#ff55ff",
+    "#55ffff",
+    "#ffffff"
+  ];
+  return palette[Math.floor(Math.random() * palette.length)];
+}
 
 // --------------------------------------------------
 // Start server
