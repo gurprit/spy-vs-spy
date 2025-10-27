@@ -9,18 +9,25 @@ app.use(express.static("public"));
 const server = createServer(app);
 const wss = new WebSocketServer({ server });
 
-const SPEED = 140;        // px/sec
-const TICK_HZ = 15;       // server tickrate (Hz)
-const STUN_MS = 2000;     // trap stun length
-const SCORE_TO_WIN = 5;   // score race target
-const WIN_BANNER_MS = 3000; // ms to show winner before reset
+// --------------------------------------------------
+// Tunables
+// --------------------------------------------------
+const SPEED = 140;          // px/sec
+const TICK_HZ = 15;         // server tickrate
+const STUN_MS = 2000;       // trap stun
+const TRIGGER_RADIUS = 32;  // trap radius
+const PICK_RADIUS = 20;     // pickup distance
+const WIN_RADIUS = 24;      // distance to exit pad to escape
+const ROUND_END_FREEZE_MS = 3000; // freeze/celebrate before reset
+const SCORE_PER_WIN = 1;    // how much you get for escaping
+const SCORE_TARGET = 5;     // first to this wins overall (future use)
 
+// --------------------------------------------------
 function now() { return Date.now(); }
 
-// ---------------------------------------------------------------------
-// ROOM DEFINITIONS (TEMPLATES)
-// ---------------------------------------------------------------------
-
+// --------------------------------------------------
+// ROOM TEMPLATES (static "blueprint" for reset)
+// --------------------------------------------------
 const ROOM_TEMPLATES = {
   ARMORY: {
     w: 320, h: 200,
@@ -80,22 +87,21 @@ const ROOM_TEMPLATES = {
   }
 };
 
-// ---------------------------------------------------------------------
+// --------------------------------------------------
 // GLOBAL RUNTIME STATE
-// ---------------------------------------------------------------------
-
+// --------------------------------------------------
 const STATE = {
   tick: 0,
-  players: new Map(),   // id -> player
-  roomItems: {},        // roomName -> [ {id,x,y,label}, ... ]
-  roomTraps: {},        // roomName -> [ {id,x,y,owner,armed}, ... ]
-
-  // winner: { id, type, until } OR null
-  winner: null
+  players: new Map(),    // id -> player
+  roomItems: {},         // live items per room
+  roomTraps: {},         // live traps per room
+  roundOver: false,      // are we in the post-win freeze?
+  winner: null,          // { id, type } once someone wins a round
+  roundResetAt: 0        // timestamp when we should reset round
 };
 
-// initialize room items/traps from template
-function resetRoomsAndItems() {
+// initialize per-room live state (items, traps)
+function resetRooms() {
   STATE.roomItems = {};
   STATE.roomTraps = {};
   for (const roomName of Object.keys(ROOM_TEMPLATES)) {
@@ -105,36 +111,12 @@ function resetRoomsAndItems() {
   }
 }
 
-// full round reset after banner timeout
-function hardResetRound() {
-  console.log("[server] HARD RESET ROUND");
+// initial fill
+resetRooms();
 
-  // reset rooms
-  resetRoomsAndItems();
-
-  // wipe winner BEFORE resuming play
-  STATE.winner = null;
-
-  // respawn/reset every player
-  STATE.players.forEach((p) => {
-    const s = spawnPos();
-    p.room = s.room;
-    p.x = s.x;
-    p.y = s.y;
-    p.vx = 0;
-    p.vy = 0;
-    p.inventory = [];
-    p.stunnedUntil = 0;
-    p.score = 0;
-  });
-}
-
-// boot-time init
-resetRoomsAndItems();
-
-// ---------------------------------------------------------------------
-// HELPERS
-// ---------------------------------------------------------------------
+// --------------------------------------------------
+// Helpers
+// --------------------------------------------------
 
 function spawnPos() {
   return {
@@ -157,31 +139,30 @@ function randColor() {
   return palette[Math.floor(Math.random() * palette.length)];
 }
 
-// Are we currently in "winner freeze" time?
-function inWinnerFreeze() {
-  if (!STATE.winner) return false;
-  return now() < STATE.winner.until;
+// wipe player for new round but keep their score/color
+function respawnPlayer(p) {
+  const start = spawnPos();
+  p.room = start.room;
+  p.x = start.x;
+  p.y = start.y;
+  p.vx = 0;
+  p.vy = 0;
+  p.lastSeq = 0;
+  p.lastHeard = now();
+  p.inventory = [];
+  p.stunnedUntil = 0;
 }
 
-// After freeze ends, trigger a hard reset (one time)
-function maybeEndWinnerFreeze() {
-  if (!STATE.winner) return;
-  if (now() >= STATE.winner.until) {
-    // freeze is over, do hard reset round
-    hardResetRound();
-  }
-}
-
-// ---------------------------------------------------------------------
-// NEW CONNECTION
-// ---------------------------------------------------------------------
-
+// --------------------------------------------------
+// New connections
+// --------------------------------------------------
 wss.on("connection", (ws) => {
   const id = crypto.randomUUID();
   const start = spawnPos();
 
   const player = {
     id,
+    shortId: id.slice(0,4),
     room: start.room,
     x: start.x,
     y: start.y,
@@ -189,24 +170,33 @@ wss.on("connection", (ws) => {
     vy: 0,
     color: randColor(),
 
+    score: 0,          // persistent between rounds
+
     lastSeq: 0,
     lastHeard: now(),
 
     inventory: [],     // [{id,label}]
-    stunnedUntil: 0,   // timestamp (ms)
-    score: 0,          // trap points
-
+    stunnedUntil: 0,   // ms timestamp
     _ws: ws
   };
 
   STATE.players.set(id, player);
-
   console.log(`[server] player connected ${id} in ${player.room} (${player.x},${player.y})`);
 
-  ws.send(JSON.stringify({ t: "welcome", id, tick: STATE.tick }));
+  ws.send(JSON.stringify({
+    t: "welcome",
+    id,
+    tick: STATE.tick
+  }));
+
   sendSnapshot(ws);
 
   ws.on("message", (buf) => {
+    if (STATE.roundOver) {
+      // during roundOver we're frozen, ignore actions
+      return;
+    }
+
     let m;
     try {
       m = JSON.parse(buf);
@@ -235,13 +225,13 @@ wss.on("connection", (ws) => {
   });
 });
 
-// ---------------------------------------------------------------------
-// INPUT / ACTION
-// ---------------------------------------------------------------------
+// --------------------------------------------------
+// Player input handlers
+// --------------------------------------------------
 
 function handleInput(player, m) {
-  // If we're in freeze OR they're stunned, ignore movement
-  if (inWinnerFreeze() || player.stunnedUntil > now()) {
+  // stunned players can't move
+  if (player.stunnedUntil > now()) {
     player.vx = 0;
     player.vy = 0;
     return;
@@ -259,16 +249,11 @@ function handleInput(player, m) {
   player.lastHeard = now();
 }
 
-// pick up closest item in the room
+// attempt pickup of closest item in room
 function handlePickup(player) {
-  // You shouldn't be able to pick stuff up during freeze either
-  if (inWinnerFreeze()) return;
-
   const roomName = player.room;
   const itemsInRoom = STATE.roomItems[roomName];
   if (!itemsInRoom || !itemsInRoom.length) return;
-
-  const PICK_RADIUS = 20;
 
   for (let i = 0; i < itemsInRoom.length; i++) {
     const it = itemsInRoom[i];
@@ -286,10 +271,8 @@ function handlePickup(player) {
   }
 }
 
-// place a trap in the current room if you have TRAP KIT
+// place a trap if you have TRAP KIT
 function handlePlaceTrap(player) {
-  if (inWinnerFreeze()) return;
-
   const trapIndex = player.inventory.findIndex(
     it => it.id === "trap" || it.label === "TRAP KIT"
   );
@@ -316,38 +299,43 @@ function handlePlaceTrap(player) {
     `[server] ${player.id} PLACED TRAP ${newTrap.id} in ${roomName} at (${newTrap.x},${newTrap.y})`
   );
 
+  // consume kit
   player.inventory.splice(trapIndex, 1);
 }
 
-// ---------------------------------------------------------------------
-// SIMULATION STEP
-// ---------------------------------------------------------------------
+// --------------------------------------------------
+// Simulation / step
+// --------------------------------------------------
 
 function step(dt) {
   const tNow = now();
 
+  // If roundOver: freeze everybody totally
+  if (STATE.roundOver) {
+    STATE.players.forEach((p) => {
+      p.vx = 0;
+      p.vy = 0;
+    });
+  }
+
   STATE.players.forEach((p) => {
-    // During winner freeze, no movement at all
-    if (inWinnerFreeze()) {
-      p.vx = 0;
-      p.vy = 0;
-    } else if (p.stunnedUntil > tNow) {
-      // stunned, no movement
-      p.vx = 0;
-      p.vy = 0;
-    } else {
-      // normal movement
+    // regular movement if not stunned and not roundOver
+    if (!STATE.roundOver && p.stunnedUntil <= tNow) {
       p.x += p.vx * dt;
       p.y += p.vy * dt;
+    } else {
+      // freeze
+      p.vx = 0;
+      p.vy = 0;
     }
 
-    // Clamp inside room
+    // clamp in room
     const def = ROOM_TEMPLATES[p.room];
     p.x = Math.max(16, Math.min(def.w - 16, p.x));
     p.y = Math.max(16, Math.min(def.h - 16, p.y));
 
-    // Door teleport (only if not frozen)
-    if (!inWinnerFreeze()) {
+    // door teleport (only if not stunned and not roundOver)
+    if (!STATE.roundOver && p.stunnedUntil <= tNow) {
       for (const door of def.doors) {
         const inside =
           p.x > door.x &&
@@ -367,172 +355,179 @@ function step(dt) {
       }
     }
 
-    // Trap trigger (AFTER door travel, not during freeze)
-    if (!inWinnerFreeze()) {
+    // trap check (after possible door change)
+    if (!STATE.roundOver) {
       applyTrapIfHit(p, tNow);
     }
   });
 
-  // Only check win conditions (and maybe start freeze) if we're not already frozen
-  if (!inWinnerFreeze()) {
-    checkWinByEscape();
-    checkWinByScore();
+  if (!STATE.roundOver) {
+    checkWinCondition();
   } else {
-    // If freeze time expired, reset round
-    maybeEndWinnerFreeze();
+    maybeResetRound();
   }
 
   STATE.tick++;
 }
 
-// trap collision check
-function applyTrapIfHit(victim, tNow) {
-  const roomName = victim.room;
+// trap collision
+function applyTrapIfHit(player, tNow) {
+  const roomName = player.room;
   const traps = STATE.roomTraps[roomName];
   if (!traps || !traps.length) return;
-
-  const TRIGGER_RADIUS = 32;
 
   for (let i = 0; i < traps.length; i++) {
     const tr = traps[i];
     if (!tr.armed) continue;
 
-    const dist = Math.hypot(victim.x - tr.x, victim.y - tr.y);
+    const dist = Math.hypot(player.x - tr.x, player.y - tr.y);
 
+    // debug-ish
     if (dist < TRIGGER_RADIUS * 2) {
       console.log(
-        `[server] checking trap ${tr.id} vs player ${victim.id} in ${roomName}: dist=${dist.toFixed(
+        `[server] checking trap ${tr.id} vs player ${player.id} in ${roomName}: dist=${dist.toFixed(
           1
         )}, radius=${TRIGGER_RADIUS}`
       );
     }
 
-    // owner is immune
-    if (victim.id === tr.owner) {
+    // don't trigger your own trap
+    if (player.id === tr.owner) {
       if (dist <= TRIGGER_RADIUS) {
         console.log(
-          `[server] ${victim.id} is standing on their OWN trap ${tr.id} (safe)`
+          `[server] ${player.id} is standing on their OWN trap ${tr.id} (safe)`
         );
       }
       continue;
     }
 
-    // victim triggers it
+    // trigger someone else's trap
     if (dist <= TRIGGER_RADIUS) {
       console.log(
-        `[server] TRAP TRIGGERED ${tr.id} on player ${victim.id} in ${roomName} at (${tr.x},${tr.y})`
+        `[server] TRAP TRIGGERED ${tr.id} on player ${player.id} in ${roomName} at (${tr.x},${tr.y})`
       );
 
       tr.armed = false;
 
       // stun victim
-      victim.stunnedUntil = tNow + STUN_MS;
-      victim.vx = 0;
-      victim.vy = 0;
+      player.stunnedUntil = tNow + STUN_MS;
+      player.vx = 0;
+      player.vy = 0;
 
-      // score for owner
-      const ownerPlayer = STATE.players.get(tr.owner);
-      if (ownerPlayer) {
-        ownerPlayer.score = (ownerPlayer.score || 0) + 1;
-        console.log(`[server] ${tr.owner} SCORE +1 => ${ownerPlayer.score}`);
-      }
-
-      // remove trap from room
+      // remove trap
       traps.splice(i, 1);
-
       break;
     }
   }
 }
 
-// ---------------------------------------------------------------------
-// WIN CONDITIONS
-// ---------------------------------------------------------------------
+// --------------------------------------------------
+// Win / Round over / Reset
+// --------------------------------------------------
 
-function startWinnerFreeze(winnerId, typeStr) {
-  STATE.winner = {
-    id: winnerId,
-    type: typeStr,       // "escape" or "score"
-    until: now() + WIN_BANNER_MS
-  };
-  console.log(`[server] WINNER (${typeStr.toUpperCase()}) IS ${winnerId}`);
-}
+// check if someone satisfies escape condition
+function checkWinCondition() {
+  // already handled in roundOver
+  if (STATE.roundOver) return;
 
-function checkWinByEscape() {
-  // "escape" win: intel+key+exit
-  if (STATE.winner) return;
+  const tNow = now();
 
   STATE.players.forEach((p) => {
-    const hasIntel = p.inventory.some(
-      it => it.id === "brief" || it.label === "INTEL"
-    );
-    const hasKey   = p.inventory.some(
-      it => it.id === "key"   || it.label === "KEY"
-    );
-    if (!hasIntel || !hasKey) return;
-    if (p.room !== "EXIT") return;
+    // Win path 1: Escape (has INTEL+KEY and stands on EXIT PAD)
+    if (canEscape(p)) {
+      console.log(`[server] WINNER (escape) IS ${p.id}`);
 
-    const exitAnchor = ROOM_TEMPLATES.EXIT.items.find(
-      it => it.id === "escape"
-    );
-    if (!exitAnchor) return;
+      // award score
+      p.score += SCORE_PER_WIN;
 
-    const distToExit = Math.hypot(p.x - exitAnchor.x, p.y - exitAnchor.y);
-    const WIN_RADIUS = 24;
-
-    if (distToExit <= WIN_RADIUS) {
-      startWinnerFreeze(p.id, "escape");
+      startRoundOver(p.id, "escape");
+      return;
     }
+
+    // Win path 2: Score race (optional future):
+    // if (p.score >= SCORE_TARGET) {
+    //   console.log(`[server] WINNER (score) IS ${p.id}`);
+    //   startRoundOver(p.id, "score");
+    // }
   });
 }
 
-function checkWinByScore() {
-  // "score" win: first to SCORE_TO_WIN
-  if (STATE.winner) return;
+// helper: does player meet escape condition right now?
+function canEscape(p) {
+  // need intel + key
+  const hasIntel = p.inventory.some(
+    it => it.id === "brief" || it.label === "INTEL"
+  );
+  const hasKey = p.inventory.some(
+    it => it.id === "key" || it.label === "KEY"
+  );
+  if (!(hasIntel && hasKey)) return false;
 
+  // must be in EXIT room near EXIT PAD
+  if (p.room !== "EXIT") return false;
+  const exitAnchor = ROOM_TEMPLATES.EXIT.items.find(
+    it => it.id === "escape"
+  );
+  if (!exitAnchor) return false;
+
+  const distToExit = Math.hypot(p.x - exitAnchor.x, p.y - exitAnchor.y);
+  return distToExit <= WIN_RADIUS;
+}
+
+// mark round as over, freeze players, schedule reset
+function startRoundOver(winnerId, type) {
+  STATE.roundOver = true;
+  STATE.winner = { id: winnerId, type };
+  STATE.roundResetAt = now() + ROUND_END_FREEZE_MS;
+
+  // hard-freeze everyone immediately
   STATE.players.forEach((p) => {
-    if (p.score >= SCORE_TO_WIN) {
-      startWinnerFreeze(p.id, "score");
-    }
+    p.vx = 0;
+    p.vy = 0;
+    // also "stun" for visuals client-side
+    p.stunnedUntil = STATE.roundResetAt;
   });
 }
 
-// ---------------------------------------------------------------------
-// SNAPSHOT
-// ---------------------------------------------------------------------
+// after freeze time, reset round
+function maybeResetRound() {
+  const tNow = now();
+  if (!STATE.roundOver) return;
+  if (tNow < STATE.roundResetAt) return;
 
+  // 1. reset rooms (items respawn, traps cleared)
+  resetRooms();
+
+  // 2. respawn players but KEEP score/color
+  STATE.players.forEach((p) => {
+    respawnPlayer(p);
+  });
+
+  // 3. clear roundOver
+  STATE.roundOver = false;
+  STATE.winner = null;
+  STATE.roundResetAt = 0;
+
+  console.log("[server] round reset complete");
+}
+
+// --------------------------------------------------
+// Snapshot per player -> send to that player only
+// --------------------------------------------------
 function snapshotFor(playerId) {
   const me = STATE.players.get(playerId);
   if (!me) return null;
 
   const roomName = me.room;
   const roomDef = ROOM_TEMPLATES[roomName];
-
-  const itemsInRoom = STATE.roomItems[roomName] || [];
-  const trapsInRoom = STATE.roomTraps[roomName] || [];
-
   const tNow = now();
 
-  // players in same room + add shortId for nameplate
-  const visiblePlayers = [];
-  STATE.players.forEach((p) => {
-    if (p.room === me.room) {
-      visiblePlayers.push({
-        id: p.id,
-        shortId: p.id.slice(0,4),
-        room: p.room,
-        x: Math.round(p.x),
-        y: Math.round(p.y),
-        color: p.color,
-        isStunned: p.stunnedUntil > tNow,
-        stunMsRemaining: Math.max(p.stunnedUntil - tNow, 0),
-        score: p.score || 0
-      });
-    }
-  });
-
-  // only show YOUR traps to YOU
-  const visibleTraps = trapsInRoom
+  // items in YOUR current room
+  const itemsInRoom = STATE.roomItems[roomName] || [];
+  // traps in YOUR current room
+  // IMPORTANT: we only send traps that YOU own so other players can't see them
+  const allTrapsInRoom = STATE.roomTraps[roomName] || [];
+  const visibleTraps = allTrapsInRoom
     .filter(tr => tr.owner === me.id)
     .map(tr => ({
       id: tr.id,
@@ -540,6 +535,24 @@ function snapshotFor(playerId) {
       y: tr.y,
       owner: tr.owner
     }));
+
+  // players in your room
+  const visiblePlayers = [];
+  STATE.players.forEach((p) => {
+    if (p.room === roomName) {
+      visiblePlayers.push({
+        id: p.id,
+        shortId: p.shortId,
+        room: p.room,
+        x: Math.round(p.x),
+        y: Math.round(p.y),
+        color: p.color,
+        isStunned: p.stunnedUntil > tNow,
+        stunMsRemaining: Math.max(p.stunnedUntil - tNow, 0),
+        score: p.score
+      });
+    }
+  });
 
   return {
     t: "snapshot",
@@ -572,17 +585,15 @@ function snapshotFor(playerId) {
       label: it.label
     })),
 
-    youScore: me.score || 0,
-    scoreTarget: SCORE_TO_WIN,
+    youScore: me.score,
+    scoreTarget: SCORE_TARGET,
 
-    // If we're frozen, we still send winner so client can keep banner visible
     winner: STATE.winner
       ? { id: STATE.winner.id, type: STATE.winner.type }
       : null
   };
 }
 
-// send one snapshot to one socket
 function sendSnapshot(ws) {
   const player = [...STATE.players.values()].find(p => p._ws === ws);
   if (!player) return;
@@ -595,7 +606,6 @@ function sendSnapshot(ws) {
   }
 }
 
-// broadcast snapshots to all connected
 function broadcastSnapshots() {
   STATE.players.forEach((p) => {
     const ws = p._ws;
@@ -608,10 +618,9 @@ function broadcastSnapshots() {
   });
 }
 
-// ---------------------------------------------------------------------
-// MAIN LOOP
-// ---------------------------------------------------------------------
-
+// --------------------------------------------------
+// Main loop
+// --------------------------------------------------
 let last = now();
 setInterval(() => {
   const t = now();
@@ -622,10 +631,9 @@ setInterval(() => {
   broadcastSnapshots();
 }, 1000 / TICK_HZ);
 
-// ---------------------------------------------------------------------
-// START SERVER
-// ---------------------------------------------------------------------
-
+// --------------------------------------------------
+// Start server
+// --------------------------------------------------
 const PORT = process.env.PORT || 3000;
 server.listen(PORT, () => {
   console.log(`http://localhost:${PORT}`);
