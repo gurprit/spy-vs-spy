@@ -4,26 +4,26 @@
     <meta charset="utf-8" />
     <title>Spy vs Spy Proto</title>
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no" />
+
     <style>
       body {
         margin: 0;
         background: #0d0f14;
         font-family: sans-serif;
-        touch-action: none; /* prevent scroll while dragging joystick */
+        touch-action: none;
         overflow: hidden;
       }
 
-      /* mobile controls container */
       .mobile-ui {
         position: fixed;
         left: 0;
         top: 0;
         width: 100vw;
         height: 100vh;
-        pointer-events: none; /* children will re-enable */
+        pointer-events: none;
+        display: none;
       }
 
-      /* D-pad wrapper bottom-left */
       .dpad {
         position: absolute;
         left: 16px;
@@ -46,20 +46,18 @@
         line-height: 44px;
         text-align: center;
         user-select: none;
-        pointer-events: auto; /* clickable */
+        pointer-events: auto;
       }
 
       .dpad-btn:active {
         background: rgba(255,255,255,0.2);
       }
 
-      /* up/left/down/right positions in the 140x140 pad */
       .dpad-up    { left:46px; top:0px;    }
       .dpad-left  { left:0px;  top:46px;   }
       .dpad-down  { left:46px; top:92px;   }
       .dpad-right { left:92px; top:46px;   }
 
-      /* Action button bottom-right */
       .action-area {
         position: absolute;
         right: 24px;
@@ -92,7 +90,6 @@
         filter: brightness(1.2);
       }
 
-      /* Tiny helper text above button */
       .action-hint {
         position: absolute;
         right: 0;
@@ -107,20 +104,20 @@
         pointer-events: none;
       }
 
-      /* Hide on desktop by default; show via @media when narrow */
-      .mobile-ui { display: none; }
       @media (max-width: 768px), (max-height: 600px) {
         .mobile-ui { display: block; }
       }
     </style>
+
+    <!-- ✅ Load Phaser from CDN instead of local file -->
+    <script src="https://cdn.jsdelivr.net/npm/phaser@3.80.1/dist/phaser.min.js"></script>
   </head>
 
   <body>
-    <!-- Phaser injects the canvas into body -->
-    <script src="phaser.min.js"></script>
+    <!-- Your game canvas will be injected by Phaser -->
     <script defer src="client.js"></script>
 
-    <!-- MOBILE CONTROLS OVERLAY -->
+    <!-- On-screen mobile controls -->
     <div class="mobile-ui" id="mobile-ui">
       <div class="dpad" id="dpad">
         <div class="dpad-btn dpad-up"    data-dir="up">▲</div>
