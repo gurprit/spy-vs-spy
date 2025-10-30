@@ -30,6 +30,7 @@ if (IS_MOBILE) {
 
 // ----- LOCAL UI STATE -----
 let selectedInvIndex = null;
+let currentAction = { type: null, enabled: false }; // e.g. { type: "PICK", enabled: true }
 
 // these are for incremental rendering (to avoid constant reflow/recreate)
 let lastInventoryRendered = [];
@@ -37,9 +38,6 @@ let lastRadarRendered = null;
 let lastWinnerIdRendered = null;
 let lastScoreRendered = null;
 let lastLegendRendered = null;
-
-// ----- LOCAL UI STATE -----
-let currentAction = { type: null, enabled: false }; // e.g. { type: "PICK", enabled: true }
 
 // ----- GAME SNAPSHOT STATE -----
 let ws;
@@ -105,7 +103,7 @@ function create() {
 
   // movement input
   scene.cursors = scene.input.keyboard.createCursorKeys();
-  scene.keys = scene.input.keyboard.addKeys("W,A,S,D,E,F");
+  scene.keys = scene.input.keyboard.addKeys("W,A,S,D,E,SPACE");
 
   // mobile joystick vector
   scene.joyVec = { x: 0, y: 0 };
@@ -174,11 +172,19 @@ function update(time, delta) {
 
   // desktop action keys
   if (!IS_MOBILE) {
-    if (Phaser.Input.Keyboard.JustDown(scene.keys.F)) {
-      handleFire();
+    if (Phaser.Input.Keyboard.JustDown(scene.keys.SPACE)) {
+      if (currentAction.type === "PICK" && currentAction.enabled) {
+        ws.send(JSON.stringify({ t: "pickup" }));
+      } else {
+        handleFire();
+      }
     }
     if (Phaser.Input.Keyboard.JustDown(scene.keys.E)) {
-      handleAction();
+      if (currentAction.type === "USE" && currentAction.enabled) {
+        if (selectedInvIndex !== null) {
+          ws.send(JSON.stringify({ t: "useItem", which: selectedInvIndex }));
+        }
+      }
     }
   }
 
@@ -461,8 +467,8 @@ function renderHUDHtml(snap) {
 
   // --- legend ---
   const desiredLegend = IS_MOBILE
-    ? "Tap item below,\nUSE button to activate.\nTRAP drops floor trap.\nPICK grabs nearby item."
-    : "Click an item,\nA=USE  T=TRAP  E/SPACE=PICK";
+    ? "FIRE shoots.\nACTION is context-aware (PICK/USE)."
+    : "SPACE=SHOOT/PICK, E=USE ITEM";
   if (desiredLegend !== lastLegendRendered) {
     legendEl.textContent = desiredLegend;
     lastLegendRendered = desiredLegend;
