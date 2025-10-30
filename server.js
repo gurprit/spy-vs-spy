@@ -264,10 +264,6 @@ wss.on("connection", (ws) => {
       console.log(`[server] ${player.id} requests PICKUP`);
       handlePickup(player);
     }
-    if (m.t === "placeTrap") {
-      console.log(`[server] ${player.id} requests PLACE TRAP`);
-      handlePlaceTrap(player);
-    }
     if (m.t === "useItem") { // NEW
       console.log(`[server] ${player.id} requests USE ITEM idx=${m.which}`);
       handleUseItem(player, m.which);
@@ -362,41 +358,6 @@ function respawnTrapKitElsewhere(prevRoomName) {
 }
 
 // --------------------------------------------------
-// Placing floor traps (TRAP KIT)
-// --------------------------------------------------
-function handlePlaceTrap(player) {
-  // Do they have a TRAP KIT?
-  const trapIndex = player.inventory.findIndex(
-    it => it.id === "trap" || it.label === "TRAP KIT"
-  );
-  if (trapIndex === -1) {
-    console.log(`[server] ${player.id} tried to PLACE TRAP but has no TRAP KIT`);
-    return;
-  }
-
-  const roomName = player.room;
-  const trapsInRoom = STATE.roomTraps[roomName];
-  if (!trapsInRoom) return;
-
-  const newTrap = {
-    id: "trap-" + crypto.randomUUID().slice(0, 8),
-    owner: player.id,
-    x: player.x,
-    y: player.y,
-    armed: true
-  };
-
-  trapsInRoom.push(newTrap);
-
-  console.log(
-    `[server] ${player.id} PLACED FLOOR TRAP ${newTrap.id} in ${roomName} at (${newTrap.x},${newTrap.y})`
-  );
-
-  // consume the kit
-  player.inventory.splice(trapIndex, 1);
-}
-
-// --------------------------------------------------
 // Using power-ups (MAP, DISGUISE, SPRING)
 // --------------------------------------------------
 function handleUseItem(player, whichIndexRaw) {
@@ -427,6 +388,30 @@ function handleUseItem(player, whichIndexRaw) {
 
   // normalize id/label for easier matching
   const name = (item.id || item.label || "").toUpperCase();
+
+  // TRAP KIT
+  if (name.includes("TRAP")) {
+    const roomName = player.room;
+    const trapsInRoom = STATE.roomTraps[roomName];
+    if (!trapsInRoom) return;
+
+    const newTrap = {
+      id: "trap-" + crypto.randomUUID().slice(0, 8),
+      owner: player.id,
+      x: player.x,
+      y: player.y,
+      armed: true
+    };
+
+    trapsInRoom.push(newTrap);
+    console.log(
+      `[server] ${player.id} PLACED FLOOR TRAP ${newTrap.id} in ${roomName} at (${newTrap.x},${newTrap.y})`
+    );
+
+    // consume the kit
+    inv.splice(whichIndex, 1);
+    return;
+  }
 
   // DISGUISE (aka "paint" / "DISGUISE")
   if (name.includes("DISGUISE") || name === "PAINT") {
