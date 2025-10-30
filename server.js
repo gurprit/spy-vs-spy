@@ -17,6 +17,10 @@ const TICK_HZ = 15;         // server tickrate
 const STUN_MS = 2000;       // floor trap stun
 const DOOR_TRAP_STUN_MS = 3000; // NEW: stronger stun for door traps
 const TRIGGER_RADIUS = 32;  // trap radius
+const PROJECTILE_SPEED = 300; // px/sec
+const PROJECTILE_RADIUS = 8;
+const SHOTS_TO_KILL = 3;
+const FIRE_RATE_MS = 500;   // half-second between shots
 const PICK_RADIUS = 20;     // pickup distance
 const DOOR_ARM_RADIUS = 24; // NEW: how close you must be to arm a door with SPRING
 const WIN_RADIUS = 24;      // distance to exit pad to escape
@@ -154,6 +158,7 @@ const STATE = {
   roomItems: {},         // roomName -> [{id,x,y,label}, ...]
   roomTraps: {},         // roomName -> [{id,x,y,owner,armed}, ...]  (floor traps)
   roomDoorTraps: {},     // NEW: roomName -> [{doorIndex, owner, armed, type}]
+  roomProjectiles: {},   // roomName -> [{id,owner,x,y,vx,vy}, ...]
   roundOver: false,
   winner: null,          // { id, type }
   roundResetAt: 0
@@ -167,13 +172,15 @@ resetRooms();
 function resetRooms() {
   STATE.roomItems = {};
   STATE.roomTraps = {};
-  STATE.roomDoorTraps = {}; // NEW
+  STATE.roomDoorTraps = {};
+  STATE.roomProjectiles = {};
 
   for (const roomName of Object.keys(ROOM_TEMPLATES)) {
     const tmpl = ROOM_TEMPLATES[roomName];
     STATE.roomItems[roomName] = tmpl.items.map(it => ({ ...it }));
     STATE.roomTraps[roomName] = [];
     STATE.roomDoorTraps[roomName] = [];
+    STATE.roomProjectiles[roomName] = [];
   }
 }
 
@@ -190,6 +197,8 @@ function respawnPlayer(p) {
   p.stunnedUntil = 0;
   p.disguisedUntil = 0;       // NEW: clear disguise
   p.radarRevealUntil = 0;     // NEW: clear radar
+  p.health = SHOTS_TO_KILL;
+  p.lastShotTime = 0;
 }
 
 // --------------------------------------------------
@@ -216,6 +225,9 @@ wss.on("connection", (ws) => {
 
     inventory: [],
     stunnedUntil: 0,
+
+    health: SHOTS_TO_KILL,
+    lastShotTime: 0,
 
     disguisedUntil: 0,       // NEW
     radarRevealUntil: 0,     // NEW
@@ -259,6 +271,10 @@ wss.on("connection", (ws) => {
     if (m.t === "useItem") { // NEW
       console.log(`[server] ${player.id} requests USE ITEM idx=${m.which}`);
       handleUseItem(player, m.which);
+    }
+    if (m.t === "shoot") {
+      console.log(`[server] ${player.id} requests SHOOT`);
+      handleShoot(player);
     }
   });
 
@@ -488,6 +504,47 @@ function tryArmDoorTrap(player) {
 }
 
 // --------------------------------------------------
+// Shooting
+// --------------------------------------------------
+function handleShoot(player) {
+  const tNow = now();
+  if (player.stunnedUntil > tNow) return;
+  if (tNow - player.lastShotTime < FIRE_RATE_MS) return;
+
+  player.lastShotTime = tNow;
+
+  // projectile starts at player's center
+  const px = player.x;
+  const py = player.y;
+
+  // velocity is based on player's current movement direction, or a default if still
+  let pvx = player.vx;
+  let pvy = player.vy;
+  if (pvx === 0 && pvy === 0) {
+    pvx = 1; // default to shooting right
+  }
+  const mag = Math.hypot(pvx, pvy) || 1;
+
+  const proj = {
+    id: "proj-" + crypto.randomUUID().slice(0, 8),
+    owner: player.id,
+    x: px,
+    y: py,
+    vx: (pvx / mag) * PROJECTILE_SPEED,
+    vy: (pvy / mag) * PROJECTILE_SPEED,
+    spawnedAt: tNow
+  };
+
+  const roomName = player.room;
+  if (!STATE.roomProjectiles[roomName]) {
+    STATE.roomProjectiles[roomName] = [];
+  }
+  STATE.roomProjectiles[roomName].push(proj);
+
+  console.log(`[server] ${player.id} FIRED projectile ${proj.id} in ${roomName}`);
+}
+
+// --------------------------------------------------
 // Simulation step
 // --------------------------------------------------
 function step(dt) {
@@ -545,6 +602,50 @@ function step(dt) {
       applyFloorTrapIfHit(p, tNow);
     }
   });
+
+  // move projectiles and check for hits
+  for (const roomName of Object.keys(STATE.roomProjectiles)) {
+    const projectilesInRoom = STATE.roomProjectiles[roomName];
+    if (!projectilesInRoom || !projectilesInRoom.length) continue;
+
+    const roomDef = ROOM_TEMPLATES[roomName];
+
+    for (let i = projectilesInRoom.length - 1; i >= 0; i--) {
+      const proj = projectilesInRoom[i];
+      proj.x += proj.vx * dt;
+      proj.y += proj.vy * dt;
+
+      // remove if out of bounds
+      if (proj.x < 0 || proj.x > roomDef.w || proj.y < 0 || proj.y > roomDef.h) {
+        projectilesInRoom.splice(i, 1);
+        continue;
+      }
+
+      // check for player hits
+      for (const p of STATE.players.values()) {
+        if (p.room !== roomName || p.id === proj.owner) continue;
+
+        const dist = Math.hypot(p.x - proj.x, p.y - proj.y);
+        if (dist < PROJECTILE_RADIUS * 2) { // using 2*radius for easier hits
+          console.log(`[server] projectile ${proj.id} HIT player ${p.id}`);
+          p.health--;
+
+          // remove projectile
+          projectilesInRoom.splice(i, 1);
+
+          if (p.health <= 0) {
+            console.log(`[server] player ${p.id} KILLED by ${proj.owner}`);
+            const killer = STATE.players.get(proj.owner);
+            if (killer) {
+              killer.score++;
+            }
+            respawnPlayer(p);
+          }
+          break; // projectile is gone, stop checking this projectile
+        }
+      }
+    }
+  }
 
   if (!STATE.roundOver) {
     checkWinCondition();
@@ -742,6 +843,7 @@ function snapshotFor(playerId) {
 
   const itemsInRoom = STATE.roomItems[roomName] || [];
   const floorTrapsInRoom = STATE.roomTraps[roomName] || [];
+  const projectilesInRoom = STATE.roomProjectiles[roomName] || [];
 
   // Only show YOUR floor traps
   const visibleFloorTraps = floorTrapsInRoom
@@ -818,6 +920,12 @@ function snapshotFor(playerId) {
       label: it.label
     })),
 
+    projectiles: projectilesInRoom.map(p => ({
+      id: p.id,
+      x: p.x,
+      y: p.y
+    })),
+
     traps: visibleFloorTraps,
 
     players: visiblePlayers,
@@ -829,6 +937,8 @@ function snapshotFor(playerId) {
 
     youScore: me.score,
     scoreTarget: SCORE_TARGET,
+    yourHealth: me.health,
+    shotsToKill: SHOTS_TO_KILL,
 
     // who just won the round (for banner / freeze)
     winner: STATE.winner
