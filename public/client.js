@@ -21,6 +21,7 @@ const mobileControls = document.getElementById("mobile-controls");
 const btnPick        = document.getElementById("btn-pick");
 const btnTrap        = document.getElementById("btn-trap");
 const btnUse         = document.getElementById("btn-use");
+const btnShoot       = document.getElementById("btn-shoot");
 
 // show mobile buttons if mobile
 if (IS_MOBILE) {
@@ -52,6 +53,7 @@ let latest = {
   doors: [],
   items: [],
   traps: [],
+  projectiles: [],
 
   players: [],
   yourInventory: [],
@@ -59,6 +61,8 @@ let latest = {
 
   youScore: 0,
   scoreTarget: 5,
+  yourHealth: 3,
+  shotsToKill: 3,
 
   intelLocation: null,
   keyLocation: null,
@@ -95,11 +99,12 @@ function create() {
   scene.itemLayer = scene.add.layer();
   scene.trapLayer = scene.add.layer();
   scene.playerLayer = scene.add.layer();
+  scene.projectileLayer = scene.add.layer();
   scene.winLayer = scene.add.layer();
 
   // movement input
   scene.cursors = scene.input.keyboard.createCursorKeys();
-  scene.keys = scene.input.keyboard.addKeys("W,A,S,D,E,SPACE,T");
+  scene.keys = scene.input.keyboard.addKeys("W,A,S,D,E,SPACE,T,F");
   scene.keys.AKEY = scene.input.keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.A);
 
   // mobile joystick vector
@@ -121,6 +126,11 @@ function create() {
     });
     btnUse.addEventListener("pointerdown", () => {
       sendUseSelectedItem();
+    });
+    btnShoot.addEventListener("pointerdown", () => {
+      if (ws && ws.readyState === 1) {
+        ws.send(JSON.stringify({ t: "shoot" }));
+      }
     });
   }
 
@@ -188,6 +198,11 @@ function update(time, delta) {
     }
     if (scene.keys.AKEY.isDown && ws.readyState === 1) {
       sendUseSelectedItem();
+    }
+    if (Phaser.Input.Keyboard.JustDown(scene.keys.F)) {
+      if (ws && ws.readyState === 1) {
+        ws.send(JSON.stringify({ t: "shoot" }));
+      }
     }
   }
 
@@ -307,6 +322,7 @@ function drawRoom(scene, snap) {
   scene.doorLayer.removeAll(true);
   scene.itemLayer.removeAll(true);
   scene.trapLayer.removeAll(true);
+  scene.projectileLayer.removeAll(true);
 
   const { roomX, roomY, roomW, roomH } = getRoomScreenBox(snap.roomW, snap.roomH);
 
@@ -388,6 +404,16 @@ function drawRoom(scene, snap) {
     ).setOrigin(0.5);
     scene.trapLayer.add(trapLabel);
   });
+
+  // projectiles
+  (snap.projectiles || []).forEach(p => {
+    const { sx, sy } = roomToScreen(p.x, p.y, snap.roomW, snap.roomH);
+    const size = 8;
+    const pGfx = scene.add.graphics();
+    pGfx.fillStyle(0xffff00, 1);
+    pGfx.fillCircle(sx, sy, size/2);
+    scene.projectileLayer.add(pGfx);
+  });
 }
 
 // ---------------------------------------------------------
@@ -434,7 +460,7 @@ function drawWinner(scene, winner) {
 // ---------------------------------------------------------
 function renderHUDHtml(snap) {
   // --- score line ---
-  const newScore = `Score ${snap.youScore} / ${snap.scoreTarget}`;
+  const newScore = `Score: ${snap.youScore} / ${snap.scoreTarget} | Health: ${snap.yourHealth} / ${snap.shotsToKill}`;
   if (newScore !== lastScoreRendered) {
     scoreLineEl.textContent = newScore;
     lastScoreRendered = newScore;
@@ -443,7 +469,7 @@ function renderHUDHtml(snap) {
   // --- legend ---
   const desiredLegend = IS_MOBILE
     ? "Tap item below,\nUSE button to activate.\nTRAP drops floor trap.\nPICK grabs nearby item."
-    : "Click an item,\nA=USE  T=TRAP  E/SPACE=PICK";
+    : "Click an item,\nA=USE  T=TRAP  E/SPACE=PICK  F=SHOOT";
   if (desiredLegend !== lastLegendRendered) {
     legendEl.textContent = desiredLegend;
     lastLegendRendered = desiredLegend;
