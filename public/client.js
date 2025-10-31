@@ -110,7 +110,6 @@ function create() {
 
   if (IS_MOBILE) {
     setupMobileJoystick(scene);
-
     // hook mobile HTML buttons
     btnFire.addEventListener("pointerdown", handleFire);
     btnAction.addEventListener("pointerdown", handleAction);
@@ -252,39 +251,50 @@ function update(time, delta) {
 // Mobile joystick
 // ---------------------------------------------------------
 function setupMobileJoystick(scene) {
-  const joyCenterX = 80;
-  const joyCenterY = VIEW_H - 80;
-  const joyRadius = 40;
+  const base = document.getElementById("joystick-base");
+  const knob = document.getElementById("joystick-knob");
 
-  const base = scene.add.circle(joyCenterX, joyCenterY, joyRadius, 0x444444, 0.4)
-    .setScrollFactor(0)
-    .setInteractive({ draggable: true });
+  let isDragging = false;
+  const joyRadius = base.offsetWidth / 2;
+  const knobRadius = knob.offsetWidth / 2;
 
-  const knob = scene.add.circle(joyCenterX, joyCenterY, 20, 0xffffff, 0.6)
-    .setScrollFactor(0);
+  base.addEventListener("touchstart", (e) => {
+    isDragging = true;
+    updateKnob(e.touches[0]);
+  });
+  base.addEventListener("touchmove", (e) => {
+    if (isDragging) {
+      updateKnob(e.touches[0]);
+    }
+  });
+  base.addEventListener("touchend", () => {
+    isDragging = false;
+    resetKnob();
+  });
 
-  base.on("drag", (pointer, dragX, dragY) => {
-    const dx = dragX - joyCenterX;
-    const dy = dragY - joyCenterY;
+  function updateKnob(touch) {
+    const rect = base.getBoundingClientRect();
+    const dx = touch.clientX - (rect.left + joyRadius);
+    const dy = touch.clientY - (rect.top + joyRadius);
     const mag = Math.hypot(dx, dy) || 1;
     const clamped = Math.min(mag, joyRadius);
 
     const nx = (dx / mag) * clamped;
     const ny = (dy / mag) * clamped;
 
-    knob.x = joyCenterX + nx;
-    knob.y = joyCenterY + ny;
+    knob.style.left = (joyRadius - knobRadius + nx) + "px";
+    knob.style.top = (joyRadius - knobRadius + ny) + "px";
 
     scene.joyVec.x = nx / joyRadius;
     scene.joyVec.y = ny / joyRadius;
-  });
+  }
 
-  base.on("dragend", () => {
+  function resetKnob() {
+    knob.style.left = (joyRadius - knobRadius) + "px";
+    knob.style.top = (joyRadius - knobRadius) + "px";
     scene.joyVec.x = 0;
     scene.joyVec.y = 0;
-    knob.x = joyCenterX;
-    knob.y = joyCenterY;
-  });
+  }
 }
 
 // ---------------------------------------------------------
@@ -459,7 +469,9 @@ function renderHUDHtml(snap) {
   updateActionControl(snap);
 
   // --- score line ---
-  const newScore = `Score: ${snap.youScore} / ${snap.scoreTarget} | Health: ${snap.yourHealth} / ${snap.shotsToKill}`;
+  const yourHealth = typeof snap.yourHealth === 'number' ? snap.yourHealth : 3;
+  const shotsToKill = typeof snap.shotsToKill === 'number' ? snap.shotsToKill : 3;
+  const newScore = `Score: ${snap.youScore} / ${snap.scoreTarget} | Health: ${yourHealth} / ${shotsToKill}`;
   if (newScore !== lastScoreRendered) {
     scoreLineEl.textContent = newScore;
     lastScoreRendered = newScore;
