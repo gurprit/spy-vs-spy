@@ -17,13 +17,12 @@
       margin: 0;
       display: flex;
       flex-direction: column;
-      height: 100vh;
+      height: 90vh;
       overflow: hidden;
     }
 
     /* Mobile-first: canvas on top, HUD under it */
     #game-container {
-      flex: 0 0 auto;
       position: relative;
       background: #000;
       display: flex;
@@ -36,7 +35,6 @@
     }
 
     #hud-panel {
-      flex: 1 1 auto;
       background: var(--panel-bg);
       border-top: 1px solid var(--panel-border);
       color: #fff;
@@ -44,6 +42,7 @@
       line-height: 1.3;
       overflow-y: auto;
       padding: 8px 12px;
+      transform: translate(0px, -160px);
     }
 
     #score-line {
@@ -187,6 +186,7 @@
         border-top: none;
         border-left: 1px solid var(--panel-border);
         overflow-y: auto;
+            transform: translate(0, 0);
       }
     }
   </style>
