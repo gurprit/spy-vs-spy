@@ -18,9 +18,8 @@ const invListEl      = document.getElementById("inventory-list");
 const itemDescEl     = document.getElementById("item-desc-box");
 const radarBoxEl     = document.getElementById("radar-box");
 const mobileControls = document.getElementById("mobile-controls");
-const btnPick        = document.getElementById("btn-pick");
-const btnTrap        = document.getElementById("btn-trap");
-const btnUse         = document.getElementById("btn-use");
+const btnFire        = document.getElementById("btn-fire");
+const btnAction      = document.getElementById("btn-action");
 
 // show mobile buttons if mobile
 if (IS_MOBILE) {
@@ -31,6 +30,7 @@ if (IS_MOBILE) {
 
 // ----- LOCAL UI STATE -----
 let selectedInvIndex = null;
+let currentAction = { type: null, enabled: false }; // e.g. { type: "PICK", enabled: true }
 
 // these are for incremental rendering (to avoid constant reflow/recreate)
 let lastInventoryRendered = [];
@@ -52,6 +52,7 @@ let latest = {
   doors: [],
   items: [],
   traps: [],
+  projectiles: [],
 
   players: [],
   yourInventory: [],
@@ -59,6 +60,8 @@ let latest = {
 
   youScore: 0,
   scoreTarget: 5,
+  yourHealth: 3,
+  shotsToKill: 3,
 
   intelLocation: null,
   keyLocation: null,
@@ -95,12 +98,12 @@ function create() {
   scene.itemLayer = scene.add.layer();
   scene.trapLayer = scene.add.layer();
   scene.playerLayer = scene.add.layer();
+  scene.projectileLayer = scene.add.layer();
   scene.winLayer = scene.add.layer();
 
   // movement input
   scene.cursors = scene.input.keyboard.createCursorKeys();
-  scene.keys = scene.input.keyboard.addKeys("W,A,S,D,E,SPACE,T");
-  scene.keys.AKEY = scene.input.keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.A);
+  scene.keys = scene.input.keyboard.addKeys("W,A,S,D,E,SPACE");
 
   // mobile joystick vector
   scene.joyVec = { x: 0, y: 0 };
@@ -109,19 +112,8 @@ function create() {
     setupMobileJoystick(scene);
 
     // hook mobile HTML buttons
-    btnPick.addEventListener("pointerdown", () => {
-      if (ws && ws.readyState === 1) {
-        ws.send(JSON.stringify({ t: "pickup" }));
-      }
-    });
-    btnTrap.addEventListener("pointerdown", () => {
-      if (ws && ws.readyState === 1) {
-        ws.send(JSON.stringify({ t: "placeTrap" }));
-      }
-    });
-    btnUse.addEventListener("pointerdown", () => {
-      sendUseSelectedItem();
-    });
+    btnFire.addEventListener("pointerdown", handleFire);
+    btnAction.addEventListener("pointerdown", handleAction);
   }
 
   // websocket setup
@@ -180,14 +172,19 @@ function update(time, delta) {
 
   // desktop action keys
   if (!IS_MOBILE) {
-    if ((scene.keys.SPACE.isDown || scene.keys.E.isDown) && ws.readyState === 1) {
-      ws.send(JSON.stringify({ t: "pickup" }));
+    if (Phaser.Input.Keyboard.JustDown(scene.keys.SPACE)) {
+      if (currentAction.type === "PICK" && currentAction.enabled) {
+        ws.send(JSON.stringify({ t: "pickup" }));
+      } else {
+        handleFire();
+      }
     }
-    if (scene.keys.T.isDown && ws.readyState === 1) {
-      ws.send(JSON.stringify({ t: "placeTrap" }));
-    }
-    if (scene.keys.AKEY.isDown && ws.readyState === 1) {
-      sendUseSelectedItem();
+    if (Phaser.Input.Keyboard.JustDown(scene.keys.E)) {
+      if (currentAction.type === "USE" && currentAction.enabled) {
+        if (selectedInvIndex !== null) {
+          ws.send(JSON.stringify({ t: "useItem", which: selectedInvIndex }));
+        }
+      }
     }
   }
 
@@ -291,12 +288,27 @@ function setupMobileJoystick(scene) {
 }
 
 // ---------------------------------------------------------
-// WebSocket action: use selected item
+// Action handlers
 // ---------------------------------------------------------
-function sendUseSelectedItem() {
-  if (!ws || ws.readyState !== 1) return;
-  if (selectedInvIndex === null) return;
-  ws.send(JSON.stringify({ t: "useItem", which: selectedInvIndex }));
+function handleFire() {
+  if (ws && ws.readyState === 1) {
+    ws.send(JSON.stringify({ t: "shoot" }));
+  }
+}
+
+function handleAction() {
+  if (!ws || ws.readyState !== 1 || !currentAction.enabled) return;
+
+  switch (currentAction.type) {
+    case "PICK":
+      ws.send(JSON.stringify({ t: "pickup" }));
+      break;
+    case "USE":
+      if (selectedInvIndex !== null) {
+        ws.send(JSON.stringify({ t: "useItem", which: selectedInvIndex }));
+      }
+      break;
+  }
 }
 
 // ---------------------------------------------------------
@@ -307,6 +319,7 @@ function drawRoom(scene, snap) {
   scene.doorLayer.removeAll(true);
   scene.itemLayer.removeAll(true);
   scene.trapLayer.removeAll(true);
+  scene.projectileLayer.removeAll(true);
 
   const { roomX, roomY, roomW, roomH } = getRoomScreenBox(snap.roomW, snap.roomH);
 
@@ -388,6 +401,16 @@ function drawRoom(scene, snap) {
     ).setOrigin(0.5);
     scene.trapLayer.add(trapLabel);
   });
+
+  // projectiles
+  (snap.projectiles || []).forEach(p => {
+    const { sx, sy } = roomToScreen(p.x, p.y, snap.roomW, snap.roomH);
+    const size = 8;
+    const pGfx = scene.add.graphics();
+    pGfx.fillStyle(0xffff00, 1);
+    pGfx.fillCircle(sx, sy, size/2);
+    scene.projectileLayer.add(pGfx);
+  });
 }
 
 // ---------------------------------------------------------
@@ -433,8 +456,10 @@ function drawWinner(scene, winner) {
 // HTML HUD (incremental)
 // ---------------------------------------------------------
 function renderHUDHtml(snap) {
+  updateActionControl(snap);
+
   // --- score line ---
-  const newScore = `Score ${snap.youScore} / ${snap.scoreTarget}`;
+  const newScore = `Score: ${snap.youScore} / ${snap.scoreTarget} | Health: ${snap.yourHealth} / ${snap.shotsToKill}`;
   if (newScore !== lastScoreRendered) {
     scoreLineEl.textContent = newScore;
     lastScoreRendered = newScore;
@@ -442,8 +467,8 @@ function renderHUDHtml(snap) {
 
   // --- legend ---
   const desiredLegend = IS_MOBILE
-    ? "Tap item below,\nUSE button to activate.\nTRAP drops floor trap.\nPICK grabs nearby item."
-    : "Click an item,\nA=USE  T=TRAP  E/SPACE=PICK";
+    ? "FIRE shoots.\nACTION is context-aware (PICK/USE)."
+    : "SPACE=SHOOT/PICK, E=USE ITEM";
   if (desiredLegend !== lastLegendRendered) {
     legendEl.textContent = desiredLegend;
     lastLegendRendered = desiredLegend;
@@ -511,6 +536,52 @@ function renderHUDHtml(snap) {
 // ---------------------------------------------------------
 // Helpers for HUD
 // ---------------------------------------------------------
+const PICK_RADIUS_SQR = 22 * 22; // client-side check radius (sq)
+
+function updateActionControl(snap) {
+  const me = (snap.players || []).find(p => p.id === myId);
+  if (!me) {
+    currentAction = { type: null, enabled: false };
+    btnAction.textContent = "ACTION";
+    btnAction.disabled = true;
+    return;
+  }
+
+  // Check for nearby items
+  let canPick = false;
+  if (snap.items && snap.items.length > 0) {
+    for (const item of snap.items) {
+      const dx = me.x - item.x;
+      const dy = me.y - item.y;
+      if (dx * dx + dy * dy < PICK_RADIUS_SQR) {
+        canPick = true;
+        break;
+      }
+    }
+  }
+
+  if (canPick) {
+    currentAction = { type: "PICK", enabled: true };
+    btnAction.textContent = "PICK";
+    btnAction.disabled = false;
+  } else {
+    // Context is USE/DROP
+    if (selectedInvIndex !== null && snap.yourInventory && snap.yourInventory.length > 0) {
+      currentAction = { type: "USE", enabled: true };
+      const item = snap.yourInventory[selectedInvIndex];
+      const name = (item.label || item.id || "").toUpperCase();
+      // more specific label for trap kits
+      btnAction.textContent = (name.includes("TRAP")) ? "PLACE" : "USE";
+      btnAction.disabled = false;
+    } else {
+      currentAction = { type: "USE", enabled: false };
+      btnAction.textContent = "ACTION";
+      btnAction.disabled = true;
+    }
+  }
+}
+
+
 function inventoriesEqual(a, b) {
   if (!a && !b) return true;
   if (!a || !b) return false;
