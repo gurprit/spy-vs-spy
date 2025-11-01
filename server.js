@@ -129,6 +129,27 @@ function randSpawn() {
 }
 
 // --------------------------------------------------
+// Search logic
+// --------------------------------------------------
+function handleSearch(player) {
+    const roomName = player.room;
+    const room = STATE.roomSearchables[roomName];
+    if (!room || room.length === 0) return;
+
+    for (let i = 0; i < room.length; i++) {
+        const obj = room[i];
+        const dist = Math.hypot(player.x - obj.x, player.y - obj.y);
+
+        if (dist <= PICK_RADIUS) {
+            const item = obj.items[Math.floor(Math.random() * obj.items.length)];
+            player.inventory.push({ id: item, label: item.toUpperCase() });
+            room.splice(i, 1);
+            break;
+        }
+    }
+}
+
+// --------------------------------------------------
 // TRAP KIT RESPAWN CONFIG
 // --------------------------------------------------
 const TRAP_ROOMS_FOR_RESPAWN = [ "WORKSHOP", "CONTROL", "ARMORY", "INTEL" ];
@@ -604,26 +625,6 @@ function handleShoot(player, msg) {
 
   const proj = {
     id: "proj-" + crypto.randomUUID().slice(0, 8),
-// --------------------------------------------------
-// Search logic
-// --------------------------------------------------
-function handleSearch(player) {
-    const roomName = player.room;
-    const room = STATE.roomSearchables[roomName];
-    if (!room || room.length === 0) return;
-
-    for (let i = 0; i < room.length; i++) {
-        const obj = room[i];
-        const dist = Math.hypot(player.x - obj.x, player.y - obj.y);
-
-        if (dist <= PICK_RADIUS) {
-            const item = obj.items[Math.floor(Math.random() * obj.items.length)];
-            player.inventory.push({ id: item, label: item.toUpperCase() });
-            room.splice(i, 1);
-            break;
-        }
-    }
-}
     owner: player.id,
     x: px,
     y: py,
