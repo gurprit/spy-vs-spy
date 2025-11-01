@@ -28,84 +28,446 @@ const ROUND_END_FREEZE_MS = 3000; // pause before new round
 const SCORE_PER_WIN = 1;
 const SCORE_TARGET = 5;
 
+const BOMB_TRIGGER_RADIUS = 28;
+const BOMB_ARM_DELAY_MS = 400; // grace period before it can detonate
+const SEARCHABLE_LOOT = [
+  { id: "bomb", label: "BOMB" },
+  { id: "trap", label: "TRAP KIT" },
+  { id: "spring", label: "SPRING" },
+  { id: "map", label: "MAP" },
+  { id: "paint", label: "DISGUISE" }
+];
+
 const DISGUISE_DURATION_MS = 6000;   // NEW
 const RADAR_DURATION_MS = 5000;      // NEW
 
 function now() { return Date.now(); }
 
 // --------------------------------------------------
-// ROOM TEMPLATES
+// MAP VARIANTS
 // --------------------------------------------------
-const ROOM_TEMPLATES = {
-  ARMORY: {
-    w: 320, h: 200,
-    items: [
-      { id: "bomb",   x: 80,  y: 100, label: "BOMB" },
-      { id: "spring", x: 120, y: 140, label: "SPRING" } // NEW: door trap tool
+const MAP_VARIANTS = [
+  {
+    name: "Classic Compound",
+    exitRoom: "EXIT",
+    rooms: {
+      ARMORY: {
+        w: 320, h: 200,
+        items: [
+          { id: "bomb",   x: 80,  y: 100, label: "BOMB" },
+          { id: "spring", x: 120, y: 140, label: "SPRING" }
+        ],
+        searchables: [
+          { id: "armory-locker", label: "LOCKER", x: 250, y: 80 }
+        ],
+        doors: [
+          { x:300, y:80, w:20, h:40, targetRoom:"CONTROL", targetX:20,  targetY:100 }
+        ]
+      },
+
+      CONTROL: {
+        w: 320, h: 200,
+        items: [
+          { id: "map",  x:160, y:60,  label:"MAP" },
+          { id: "wire", x:220, y:120, label:"WIRE CUTTER" }
+        ],
+        searchables: [
+          { id: "control-desk", label: "DESK", x: 70, y: 120 },
+          { id: "control-cabinet", label: "CABINET", x: 260, y: 60 }
+        ],
+        doors: [
+          { x:0,   y:80,  w:20, h:40, targetRoom:"ARMORY",  targetX:300, targetY:100 },
+          { x:140, y:180, w:40, h:20, targetRoom:"INTEL",   targetX:160, targetY:20 }
+        ]
+      },
+
+      INTEL: {
+        w: 320, h: 200,
+        items: [
+          { id: "brief", x:160, y:100, label:"INTEL" },
+          { id: "key",   x:260, y:160, label:"KEY" }
+        ],
+        searchables: [
+          { id: "intel-filecab", label: "FILE CABINET", x: 70, y: 60 }
+        ],
+        doors: [
+          { x:140, y:0,   w:40, h:20, targetRoom:"CONTROL",  targetX:160, targetY:180 },
+          { x:300, y:80,  w:20, h:40, targetRoom:"WORKSHOP", targetX:20,  targetY:100 },
+          { x:140, y:180, w:40, h:20, targetRoom:"EXIT",     targetX:160, targetY:20 }
+        ]
+      },
+
+      WORKSHOP: {
+        w: 320, h: 200,
+        items: [
+          { id: "paint", x:80,  y:60,  label:"DISGUISE" },
+          { id: "trap",  x:200, y:120, label:"TRAP KIT" }
+        ],
+        searchables: [
+          { id: "workshop-bench", label: "WORKBENCH", x: 260, y: 150 }
+        ],
+        doors: [
+          { x:0, y:80, w:20, h:40, targetRoom:"INTEL", targetX:300, targetY:100 }
+        ]
+      },
+
+      EXIT: {
+        w: 320, h: 200,
+        items: [
+          { id: "escape", x:160, y:100, label:"EXIT PAD" }
+        ],
+        searchables: [
+          { id: "exit-crate", label: "CRATE", x: 60, y: 160 }
+        ],
+        doors: [
+          { x:140, y:0, w:40, h:20, targetRoom:"INTEL", targetX:160, targetY:180 }
+        ]
+      }
+    },
+    spawns: [
+      { room: "CONTROL",  x:160, y:100 },
+      { room: "ARMORY",   x:200, y:120 },
+      { room: "INTEL",    x:80,  y:140 },
+      { room: "WORKSHOP", x:260, y:100 }
     ],
-    doors: [
-      { x:300, y:80, w:20, h:40, targetRoom:"CONTROL", targetX:20,  targetY:100 }
-    ]
+    trapRespawns: {
+      WORKSHOP: [
+        { x: 60,  y: 60  },
+        { x: 200, y: 120 },
+        { x: 260, y: 150 },
+        { x: 140, y: 100 }
+      ],
+      CONTROL: [
+        { x: 80,  y: 80  },
+        { x: 200, y: 120 },
+        { x: 260, y: 60  }
+      ],
+      ARMORY: [
+        { x: 60,  y: 120 },
+        { x: 140, y: 80  },
+        { x: 220, y: 140 }
+      ],
+      INTEL: [
+        { x: 80,  y: 140 },
+        { x: 160, y: 60  },
+        { x: 260, y: 160 }
+      ]
+    }
   },
 
-  CONTROL: {
-    w: 320, h: 200,
-    items: [
-      { id: "map",  x:160, y:60,  label:"MAP" },              // NEW: radar intel
-      { id: "wire", x:220, y:120, label:"WIRE CUTTER" }       // future: disarm traps
+  {
+    name: "North Wing",
+    exitRoom: "EXIT",
+    rooms: {
+      CONTROL: {
+        w: 320, h: 200,
+        items: [
+          { id: "map", x: 60, y: 80, label: "MAP" }
+        ],
+        searchables: [
+          { id: "control-archive", label: "ARCHIVE", x: 240, y: 120 }
+        ],
+        doors: [
+          { x:300, y:80, w:20, h:40, targetRoom:"HALL_A", targetX:20,  targetY:100 },
+          { x:140, y:0,  w:40, h:20, targetRoom:"HALL_B", targetX:160, targetY:180 }
+        ]
+      },
+
+      HALL_A: {
+        w: 320, h: 200,
+        items: [],
+        searchables: [
+          { id: "hall-a-locker", label: "LOCKER", x: 100, y: 140 }
+        ],
+        doors: [
+          { x:0,   y:80, w:20, h:40, targetRoom:"CONTROL", targetX:300, targetY:100 },
+          { x:300, y:80, w:20, h:40, targetRoom:"ARMORY",  targetX:20,  targetY:100 },
+          { x:140, y:180, w:40, h:20, targetRoom:"EXIT",    targetX:160, targetY:20 }
+        ]
+      },
+
+      HALL_B: {
+        w: 320, h: 200,
+        items: [],
+        searchables: [
+          { id: "hall-b-crate", label: "CRATE", x: 240, y: 60 }
+        ],
+        doors: [
+          { x:140, y:180, w:40, h:20, targetRoom:"CONTROL",  targetX:160, targetY:20 },
+          { x:140, y:0,   w:40, h:20, targetRoom:"HALL_C",    targetX:160, targetY:180 }
+        ]
+      },
+
+      HALL_C: {
+        w: 320, h: 200,
+        items: [],
+        searchables: [
+          { id: "hall-c-shelf", label: "SHELF", x: 160, y: 100 }
+        ],
+        doors: [
+          { x:140, y:180, w:40, h:20, targetRoom:"HALL_B", targetX:160, targetY:20 },
+          { x:300, y:80,  w:20, h:40, targetRoom:"LAB",    targetX:20,  targetY:100 }
+        ]
+      },
+
+      ARMORY: {
+        w: 320, h: 200,
+        items: [
+          { id: "bomb", x: 200, y: 120, label: "BOMB" },
+          { id: "spring", x: 80, y: 60, label: "SPRING" }
+        ],
+        searchables: [
+          { id: "armory-rack", label: "WEAPON RACK", x: 240, y: 150 }
+        ],
+        doors: [
+          { x:0, y:80, w:20, h:40, targetRoom:"HALL_A", targetX:300, targetY:100 }
+        ]
+      },
+
+      LAB: {
+        w: 320, h: 200,
+        items: [
+          { id: "paint", x: 220, y: 140, label: "DISGUISE" }
+        ],
+        searchables: [
+          { id: "lab-bench", label: "LAB BENCH", x: 80, y: 80 }
+        ],
+        doors: [
+          { x:0,   y:80, w:20, h:40, targetRoom:"HALL_C",   targetX:300, targetY:100 },
+          { x:300, y:80, w:20, h:40, targetRoom:"STORAGE", targetX:20,  targetY:100 }
+        ]
+      },
+
+      STORAGE: {
+        w: 320, h: 200,
+        items: [
+          { id: "trap", x: 80, y: 150, label: "TRAP KIT" }
+        ],
+        searchables: [
+          { id: "storage-crates", label: "CRATES", x: 200, y: 80 }
+        ],
+        doors: [
+          { x:0, y:80, w:20, h:40, targetRoom:"LAB",  targetX:300, targetY:100 },
+          { x:300, y:80, w:20, h:40, targetRoom:"EXIT", targetX:20,  targetY:100 }
+        ]
+      },
+
+      EXIT: {
+        w: 320, h: 200,
+        items: [
+          { id: "escape", x: 160, y: 100, label: "EXIT PAD" }
+        ],
+        searchables: [
+          { id: "exit-locker", label: "LOCKER", x: 260, y: 60 }
+        ],
+        doors: [
+          { x:0, y:80, w:20, h:40, targetRoom:"STORAGE", targetX:300, targetY:100 },
+          { x:140, y:0, w:40, h:20, targetRoom:"HALL_A",  targetX:160, targetY:180 }
+        ]
+      }
+    },
+    spawns: [
+      { room: "CONTROL", x: 100, y: 140 },
+      { room: "HALL_A",  x: 220, y: 120 },
+      { room: "HALL_B",  x: 80,  y: 100 },
+      { room: "LAB",     x: 200, y: 120 }
     ],
-    doors: [
-      { x:0,   y:80,  w:20, h:40, targetRoom:"ARMORY",  targetX:300, targetY:100 },
-      { x:140, y:180, w:40, h:20, targetRoom:"INTEL",   targetX:160, targetY:20 }
-    ]
+    trapRespawns: {
+      CONTROL: [
+        { x: 220, y: 120 },
+        { x: 120, y: 80 }
+      ],
+      HALL_A: [
+        { x: 160, y: 120 },
+        { x: 260, y: 80 }
+      ],
+      ARMORY: [
+        { x: 180, y: 100 },
+        { x: 80,  y: 140 }
+      ],
+      LAB: [
+        { x: 120, y: 140 },
+        { x: 240, y: 80 }
+      ],
+      STORAGE: [
+        { x: 220, y: 160 }
+      ]
+    }
   },
 
-  INTEL: {
-    w: 320, h: 200,
-    items: [
-      { id: "brief", x:160, y:100, label:"INTEL" },
-      { id: "key",   x:260, y:160, label:"KEY" }
-    ],
-    doors: [
-      { x:140, y:0,   w:40, h:20, targetRoom:"CONTROL",  targetX:160, targetY:180 },
-      { x:300, y:80,  w:20, h:40, targetRoom:"WORKSHOP", targetX:20,  targetY:100 },
-      { x:140, y:180, w:40, h:20, targetRoom:"EXIT",     targetX:160, targetY:20 }
-    ]
-  },
+  {
+    name: "Looping Lair",
+    exitRoom: "EXIT",
+    rooms: {
+      ATRIUM: {
+        w: 320, h: 200,
+        items: [
+          { id: "map", x: 160, y: 60, label: "MAP" }
+        ],
+        searchables: [
+          { id: "atrium-planter", label: "PLANTER", x: 80, y: 140 }
+        ],
+        doors: [
+          { x:0, y:80, w:20, h:40, targetRoom:"WEST_CORRIDOR", targetX:300, targetY:100 },
+          { x:300, y:80, w:20, h:40, targetRoom:"EAST_CORRIDOR", targetX:20, targetY:100 }
+        ]
+      },
 
-  WORKSHOP: {
-    w: 320, h: 200,
-    items: [
-      { id: "paint", x:80,  y:60,  label:"DISGUISE" }, // NEW: lets you hide ID
-      { id: "trap",  x:200, y:120, label:"TRAP KIT" }  // our floor trap
-    ],
-    doors: [
-      { x:0, y:80, w:20, h:40, targetRoom:"INTEL", targetX:300, targetY:100 }
-    ]
-  },
+      WEST_CORRIDOR: {
+        w: 320, h: 200,
+        items: [],
+        searchables: [
+          { id: "west-locker", label: "LOCKER", x: 120, y: 100 }
+        ],
+        doors: [
+          { x:0, y:80, w:20, h:40, targetRoom:"ARMORY", targetX:300, targetY:100 },
+          { x:300, y:80, w:20, h:40, targetRoom:"ATRIUM", targetX:20, targetY:100 }
+        ]
+      },
 
-  EXIT: {
-    w: 320, h: 200,
-    items: [
-      { id: "escape", x:160, y:100, label:"EXIT PAD" }
+      EAST_CORRIDOR: {
+        w: 320, h: 200,
+        items: [],
+        searchables: [
+          { id: "east-cabinet", label: "CABINET", x: 200, y: 140 }
+        ],
+        doors: [
+          { x:0, y:80, w:20, h:40, targetRoom:"ATRIUM", targetX:300, targetY:100 },
+          { x:300, y:80, w:20, h:40, targetRoom:"WORKSHOP", targetX:20, targetY:100 }
+        ]
+      },
+
+      ARMORY: {
+        w: 320, h: 200,
+        items: [
+          { id: "bomb", x: 220, y: 140, label: "BOMB" }
+        ],
+        searchables: [
+          { id: "armory-chest", label: "CHEST", x: 80, y: 60 }
+        ],
+        doors: [
+          { x:0, y:80, w:20, h:40, targetRoom:"VAULT", targetX:300, targetY:100 },
+          { x:300, y:80, w:20, h:40, targetRoom:"WEST_CORRIDOR", targetX:20, targetY:100 }
+        ]
+      },
+
+      VAULT: {
+        w: 320, h: 200,
+        items: [
+          { id: "brief", x: 160, y: 100, label: "INTEL" },
+          { id: "key", x: 240, y: 60, label: "KEY" }
+        ],
+        searchables: [
+          { id: "vault-safe", label: "SAFE", x: 100, y: 150 }
+        ],
+        doors: [
+          { x:0, y:80, w:20, h:40, targetRoom:"ARMORY", targetX:300, targetY:100 },
+          { x:300, y:80, w:20, h:40, targetRoom:"EXIT", targetX:20, targetY:100 }
+        ]
+      },
+
+      WORKSHOP: {
+        w: 320, h: 200,
+        items: [
+          { id: "trap", x: 200, y: 120, label: "TRAP KIT" },
+          { id: "paint", x: 80, y: 80, label: "DISGUISE" }
+        ],
+        searchables: [
+          { id: "workshop-shelf", label: "SHELF", x: 260, y: 150 }
+        ],
+        doors: [
+          { x:0, y:80, w:20, h:40, targetRoom:"EAST_CORRIDOR", targetX:300, targetY:100 },
+          { x:300, y:80, w:20, h:40, targetRoom:"EXIT", targetX:20, targetY:100 }
+        ]
+      },
+
+      EXIT: {
+        w: 320, h: 200,
+        items: [
+          { id: "escape", x: 160, y: 100, label: "EXIT PAD" }
+        ],
+        searchables: [
+          { id: "exit-cache", label: "CACHE", x: 260, y: 60 }
+        ],
+        doors: [
+          { x:0, y:80, w:20, h:40, targetRoom:"WORKSHOP", targetX:300, targetY:100 },
+          { x:300, y:80, w:20, h:40, targetRoom:"VAULT", targetX:20, targetY:100 }
+        ]
+      }
+    },
+    spawns: [
+      { room: "ATRIUM", x: 160, y: 150 },
+      { room: "WEST_CORRIDOR", x: 160, y: 100 },
+      { room: "EAST_CORRIDOR", x: 160, y: 100 },
+      { room: "WORKSHOP", x: 140, y: 120 }
     ],
-    doors: [
-      { x:140, y:0, w:40, h:20, targetRoom:"INTEL", targetX:160, targetY:180 }
-    ]
+    trapRespawns: {
+      ATRIUM: [
+        { x: 240, y: 120 }
+      ],
+      WEST_CORRIDOR: [
+        { x: 200, y: 100 }
+      ],
+      ARMORY: [
+        { x: 120, y: 140 }
+      ],
+      WORKSHOP: [
+        { x: 220, y: 150 }
+      ],
+      VAULT: [
+        { x: 200, y: 160 }
+      ]
+    }
   }
-};
-
-// --------------------------------------------------
-// PLAYER SPAWNS
-// --------------------------------------------------
-const SPAWNS = [
-  { room: "CONTROL",  x:160, y:100 },
-  { room: "ARMORY",   x:200, y:120 },
-  { room: "INTEL",    x:80,  y:140 },
-  { room: "WORKSHOP", x:260, y:100 }
 ];
 
+function cloneRooms(defs) {
+  const rooms = {};
+  for (const [name, def] of Object.entries(defs)) {
+    rooms[name] = {
+      w: def.w,
+      h: def.h,
+      items: def.items.map(it => ({ ...it })),
+      doors: def.doors.map(d => ({ ...d })),
+      searchables: def.searchables ? def.searchables.map(s => ({ ...s, used: !!s.used })) : []
+    };
+  }
+  return rooms;
+}
+
+function pick(arr) {
+  return arr[Math.floor(Math.random() * arr.length)];
+}
+
+let CURRENT_MAP = null;
+let ROOM_TEMPLATES = {};
+let SPAWNS = [];
+let TRAP_RESPAWN_SPOTS = {};
+
+function chooseNewMapVariant(previousName = null) {
+  let pool = MAP_VARIANTS;
+  if (previousName) {
+    const filtered = MAP_VARIANTS.filter(v => v.name !== previousName);
+    if (filtered.length) {
+      pool = filtered;
+    }
+  }
+
+  const variant = pick(pool);
+  CURRENT_MAP = variant;
+  ROOM_TEMPLATES = cloneRooms(variant.rooms);
+  SPAWNS = variant.spawns.map(sp => ({ ...sp }));
+  TRAP_RESPAWN_SPOTS = {};
+  for (const [roomName, spots] of Object.entries(variant.trapRespawns || {})) {
+    TRAP_RESPAWN_SPOTS[roomName] = spots.map(s => ({ ...s }));
+  }
+  console.log(`[server] Map set to ${variant.name}`);
+}
+
 function randSpawn() {
+  if (!SPAWNS.length) {
+    return { room: Object.keys(ROOM_TEMPLATES)[0], x: 160, y: 100 };
+  }
   const base = SPAWNS[Math.floor(Math.random() * SPAWNS.length)];
   const jitterX = (Math.random() * 20 - 10);
   const jitterY = (Math.random() * 20 - 10);
@@ -116,38 +478,7 @@ function randSpawn() {
   };
 }
 
-// --------------------------------------------------
-// TRAP KIT RESPAWN CONFIG
-// --------------------------------------------------
-const TRAP_ROOMS_FOR_RESPAWN = [ "WORKSHOP", "CONTROL", "ARMORY", "INTEL" ];
-
-const TRAP_RESPAWN_SPOTS = {
-  WORKSHOP: [
-    { x: 60,  y: 60  },
-    { x: 200, y: 120 },
-    { x: 260, y: 150 },
-    { x: 140, y: 100 }
-  ],
-  CONTROL: [
-    { x: 80,  y: 80  },
-    { x: 200, y: 120 },
-    { x: 260, y: 60  }
-  ],
-  ARMORY: [
-    { x: 60,  y: 120 },
-    { x: 140, y: 80  },
-    { x: 220, y: 140 }
-  ],
-  INTEL: [
-    { x: 80,  y: 140 },
-    { x: 160, y: 60  },
-    { x: 260, y: 160 }
-  ]
-};
-
-function pick(arr) {
-  return arr[Math.floor(Math.random() * arr.length)];
-}
+chooseNewMapVariant();
 
 // --------------------------------------------------
 // GLOBAL STATE
@@ -156,8 +487,10 @@ const STATE = {
   tick: 0,
   players: new Map(),    // id -> player
   roomItems: {},         // roomName -> [{id,x,y,label}, ...]
+  roomSearchables: {},   // roomName -> [{id,label,x,y,used}, ...]
   roomTraps: {},         // roomName -> [{id,x,y,owner,armed}, ...]  (floor traps)
   roomDoorTraps: {},     // NEW: roomName -> [{doorIndex, owner, armed, type}]
+  roomBombs: {},         // roomName -> [{id,x,y,owner,armedAt}]
   roomProjectiles: {},   // roomName -> [{id,owner,x,y,vx,vy}, ...]
   roundOver: false,
   winner: null,          // { id, type }
@@ -171,15 +504,19 @@ resetRooms();
 // --------------------------------------------------
 function resetRooms() {
   STATE.roomItems = {};
+  STATE.roomSearchables = {};
   STATE.roomTraps = {};
   STATE.roomDoorTraps = {};
+  STATE.roomBombs = {};
   STATE.roomProjectiles = {};
 
   for (const roomName of Object.keys(ROOM_TEMPLATES)) {
     const tmpl = ROOM_TEMPLATES[roomName];
     STATE.roomItems[roomName] = tmpl.items.map(it => ({ ...it }));
+    STATE.roomSearchables[roomName] = (tmpl.searchables || []).map(s => ({ ...s, used: false }));
     STATE.roomTraps[roomName] = [];
     STATE.roomDoorTraps[roomName] = [];
+    STATE.roomBombs[roomName] = [];
     STATE.roomProjectiles[roomName] = [];
   }
 }
@@ -216,6 +553,8 @@ wss.on("connection", (ws) => {
     y: s.y,
     vx: 0,
     vy: 0,
+    lastAimX: 1,
+    lastAimY: 0,
     color: randColor(),
 
     score: 0,
@@ -295,10 +634,19 @@ function handleInput(player, m) {
 
   const dx = m.dx ?? 0;
   const dy = m.dy ?? 0;
-  const mag = Math.hypot(dx, dy) || 1;
+  const magnitude = Math.hypot(dx, dy);
 
-  player.vx = (dx / mag) * SPEED;
-  player.vy = (dy / mag) * SPEED;
+  if (magnitude > 0.0001) {
+    const nx = dx / magnitude;
+    const ny = dy / magnitude;
+    player.vx = nx * SPEED;
+    player.vy = ny * SPEED;
+    player.lastAimX = nx;
+    player.lastAimY = ny;
+  } else {
+    player.vx = 0;
+    player.vy = 0;
+  }
   player.lastHeard = now();
 }
 
@@ -307,8 +655,8 @@ function handleInput(player, m) {
 // --------------------------------------------------
 function handlePickup(player) {
   const roomName = player.room;
-  const itemsInRoom = STATE.roomItems[roomName];
-  if (!itemsInRoom || !itemsInRoom.length) return;
+  const itemsInRoom = STATE.roomItems[roomName] || [];
+  let interacted = false;
 
   for (let i = 0; i < itemsInRoom.length; i++) {
     const it = itemsInRoom[i];
@@ -331,20 +679,50 @@ function handlePickup(player) {
         respawnTrapKitElsewhere(roomName);
       }
 
+      interacted = true;
+      break;
+    }
+  }
+
+  if (interacted) return;
+
+  const searchables = STATE.roomSearchables[roomName] || [];
+  for (const obj of searchables) {
+    if (obj.used) continue;
+    const dist = Math.hypot(player.x - obj.x, player.y - obj.y);
+    if (dist <= PICK_RADIUS) {
+      obj.used = true;
+      const lootOptions = [...SEARCHABLE_LOOT, null, null];
+      const found = pick(lootOptions);
+      if (found) {
+        player.inventory.push({ id: found.id, label: found.label });
+        console.log(
+          `[server] ${player.id} searched ${obj.label} in ${roomName} and found ${found.label}`
+        );
+      } else {
+        console.log(
+          `[server] ${player.id} searched ${obj.label} in ${roomName} but found nothing`
+        );
+      }
+      interacted = true;
       break;
     }
   }
 }
 
 function respawnTrapKitElsewhere(prevRoomName) {
-  // choose random allowed room that is NOT the room we just grabbed from
-  let pool = TRAP_ROOMS_FOR_RESPAWN.filter(r => r !== prevRoomName);
+  const rooms = Object.keys(TRAP_RESPAWN_SPOTS);
+  if (!rooms.length) return;
+
+  let pool = rooms.filter(r => r !== prevRoomName);
   if (!pool.length) {
-    pool = TRAP_ROOMS_FOR_RESPAWN.slice();
+    pool = rooms.slice();
   }
 
   const newRoom = pick(pool);
-  const spot = pick(TRAP_RESPAWN_SPOTS[newRoom]);
+  const spots = TRAP_RESPAWN_SPOTS[newRoom] || [];
+  if (!spots.length) return;
+  const spot = pick(spots);
 
   if (!STATE.roomItems[newRoom]) STATE.roomItems[newRoom] = [];
   STATE.roomItems[newRoom].push({
@@ -388,6 +766,25 @@ function handleUseItem(player, whichIndexRaw) {
 
   // normalize id/label for easier matching
   const name = (item.id || item.label || "").toUpperCase();
+
+  // BOMB (lethal floor trap)
+  if (name.includes("BOMB")) {
+    const roomName = player.room;
+    if (!STATE.roomBombs[roomName]) STATE.roomBombs[roomName] = [];
+    const bomb = {
+      id: "bomb-" + crypto.randomUUID().slice(0, 8),
+      owner: player.id,
+      x: player.x,
+      y: player.y,
+      armedAt: nowMs + BOMB_ARM_DELAY_MS
+    };
+    STATE.roomBombs[roomName].push(bomb);
+    console.log(
+      `[server] ${player.id} DROPPED BOMB ${bomb.id} in ${roomName} at (${bomb.x},${bomb.y})`
+    );
+    inv.splice(whichIndex, 1);
+    return;
+  }
 
   // TRAP KIT
   if (name.includes("TRAP")) {
@@ -502,9 +899,9 @@ function handleShoot(player) {
   const px = player.x;
   const py = player.y;
 
-  // velocity is based on player's current movement direction, or a default if still
-  let pvx = player.vx;
-  let pvy = player.vy;
+  // velocity is based on the last aim direction, not necessarily movement
+  let pvx = player.lastAimX;
+  let pvy = player.lastAimY;
   if (pvx === 0 && pvy === 0) {
     pvx = 1; // default to shooting right
   }
@@ -538,8 +935,10 @@ function step(dt) {
   if (STATE.roundOver) {
     // lock everyone in celebration
     STATE.players.forEach((p) => {
-      p.vx = 0;
-      p.vy = 0;
+  p.vx = 0;
+  p.vy = 0;
+  p.lastAimX = 1;
+  p.lastAimY = 0;
     });
   }
 
@@ -585,6 +984,7 @@ function step(dt) {
 
     if (!STATE.roundOver) {
       applyFloorTrapIfHit(p, tNow);
+      applyBombsIfHit(p, tNow);
     }
   });
 
@@ -744,6 +1144,38 @@ function applyFloorTrapIfHit(player, tNow) {
   }
 }
 
+function applyBombsIfHit(player, tNow) {
+  const roomName = player.room;
+  const bombs = STATE.roomBombs[roomName];
+  if (!bombs || !bombs.length) return;
+
+  for (let i = bombs.length - 1; i >= 0; i--) {
+    const bomb = bombs[i];
+    if (tNow < bomb.armedAt) continue;
+
+    const dist = Math.hypot(player.x - bomb.x, player.y - bomb.y);
+    if (dist > BOMB_TRIGGER_RADIUS) continue;
+
+    if (player.id === bomb.owner) {
+      continue;
+    }
+
+    bombs.splice(i, 1);
+
+    console.log(
+      `[server] BOMB ${bomb.id} detonated on ${player.id} in ${roomName}`
+    );
+
+    const owner = STATE.players.get(bomb.owner);
+    if (owner) {
+      owner.score++;
+    }
+
+    respawnPlayer(player);
+    break;
+  }
+}
+
 // --------------------------------------------------
 // Win / Round reset
 // --------------------------------------------------
@@ -772,9 +1204,13 @@ function canEscape(p) {
   );
   if (!(hasIntel && hasKey)) return false;
 
-  if (p.room !== "EXIT") return false;
+  const exitRoomName = (CURRENT_MAP && CURRENT_MAP.exitRoom) ? CURRENT_MAP.exitRoom : "EXIT";
+  if (p.room !== exitRoomName) return false;
 
-  const exitAnchor = ROOM_TEMPLATES.EXIT.items.find(
+  const exitRoomDef = ROOM_TEMPLATES[exitRoomName];
+  if (!exitRoomDef) return false;
+
+  const exitAnchor = exitRoomDef.items.find(
     it => it.id === "escape"
   );
   if (!exitAnchor) return false;
@@ -801,6 +1237,8 @@ function maybeResetRound() {
   if (tNow < STATE.roundResetAt) return;
 
   // hard reset items, traps, door traps
+  const previousMapName = CURRENT_MAP ? CURRENT_MAP.name : null;
+  chooseNewMapVariant(previousMapName);
   resetRooms();
 
   // respawn all players (keep score/color)
@@ -829,6 +1267,8 @@ function snapshotFor(playerId) {
   const itemsInRoom = STATE.roomItems[roomName] || [];
   const floorTrapsInRoom = STATE.roomTraps[roomName] || [];
   const projectilesInRoom = STATE.roomProjectiles[roomName] || [];
+  const searchablesInRoom = STATE.roomSearchables[roomName] || [];
+  const bombsInRoom = STATE.roomBombs[roomName] || [];
 
   // Only show YOUR floor traps
   const visibleFloorTraps = floorTrapsInRoom
@@ -886,6 +1326,7 @@ function snapshotFor(playerId) {
     t: "snapshot",
     tick: STATE.tick,
     you: me.id,
+    mapName: CURRENT_MAP ? CURRENT_MAP.name : "",
 
     room: me.room,
     roomW: roomDef.w,
@@ -905,10 +1346,26 @@ function snapshotFor(playerId) {
       label: it.label
     })),
 
+    searchables: searchablesInRoom.map(obj => ({
+      id: obj.id,
+      x: obj.x,
+      y: obj.y,
+      label: obj.label,
+      used: !!obj.used
+    })),
+
     projectiles: projectilesInRoom.map(p => ({
       id: p.id,
       x: p.x,
       y: p.y
+    })),
+
+    bombs: bombsInRoom.map(b => ({
+      id: b.id,
+      x: b.x,
+      y: b.y,
+      owner: b.owner,
+      armed: tNow >= b.armedAt
     })),
 
     traps: visibleFloorTraps,

@@ -51,8 +51,10 @@ let latest = {
 
   doors: [],
   items: [],
+  searchables: [],
   traps: [],
   projectiles: [],
+  bombs: [],
 
   players: [],
   yourInventory: [],
@@ -62,6 +64,8 @@ let latest = {
   scoreTarget: 5,
   yourHealth: 3,
   shotsToKill: 3,
+
+  mapName: "",
 
   intelLocation: null,
   keyLocation: null,
@@ -95,8 +99,10 @@ function create() {
   // layers
   scene.roomLayer = scene.add.layer();
   scene.doorLayer = scene.add.layer();
+  scene.searchableLayer = scene.add.layer();
   scene.itemLayer = scene.add.layer();
   scene.trapLayer = scene.add.layer();
+  scene.bombLayer = scene.add.layer();
   scene.playerLayer = scene.add.layer();
   scene.projectileLayer = scene.add.layer();
   scene.winLayer = scene.add.layer();
@@ -327,8 +333,10 @@ function handleAction() {
 function drawRoom(scene, snap) {
   scene.roomLayer.removeAll(true);
   scene.doorLayer.removeAll(true);
+  scene.searchableLayer.removeAll(true);
   scene.itemLayer.removeAll(true);
   scene.trapLayer.removeAll(true);
+  scene.bombLayer.removeAll(true);
   scene.projectileLayer.removeAll(true);
 
   const { roomX, roomY, roomW, roomH } = getRoomScreenBox(snap.roomW, snap.roomH);
@@ -391,6 +399,30 @@ function drawRoom(scene, snap) {
     scene.itemLayer.add(labelText);
   });
 
+  // searchables (desks, lockers...)
+  (snap.searchables || []).forEach(obj => {
+    const { sx, sy } = roomToScreen(obj.x, obj.y, snap.roomW, snap.roomH);
+    const boxW = 60;
+    const boxH = 24;
+    const gfx = scene.add.graphics();
+    const fillColor = obj.used ? 0x30363f : 0x3a6ea5;
+    gfx.fillStyle(fillColor, 1);
+    gfx.fillRect(sx - boxW/2, sy - boxH/2, boxW, boxH);
+    gfx.lineStyle(1, 0x000000, 1);
+    gfx.strokeRect(sx - boxW/2, sy - boxH/2, boxW, boxH);
+    gfx.setAlpha(obj.used ? 0.5 : 1);
+    scene.searchableLayer.add(gfx);
+
+    const label = scene.add.text(
+      sx,
+      sy,
+      obj.label,
+      { fontSize: "8px", color: "#ffffff", align: "center", wordWrap: { width: boxW - 4 } }
+    ).setOrigin(0.5);
+    if (obj.used) label.setAlpha(0.5);
+    scene.searchableLayer.add(label);
+  });
+
   // traps (only your own traps are sent by server)
   (snap.traps || []).forEach(tr => {
     const { sx, sy } = roomToScreen(tr.x, tr.y, snap.roomW, snap.roomH);
@@ -410,6 +442,29 @@ function drawRoom(scene, snap) {
       { fontSize: "10px", color: "#000000", align: "center" }
     ).setOrigin(0.5);
     scene.trapLayer.add(trapLabel);
+  });
+
+  // bombs (shown to everyone)
+  (snap.bombs || []).forEach(b => {
+    const { sx, sy } = roomToScreen(b.x, b.y, snap.roomW, snap.roomH);
+    const radius = 10;
+    const bombGfx = scene.add.graphics();
+    const fillColor = b.armed ? 0xff3333 : 0xffaa33;
+    bombGfx.fillStyle(fillColor, 1);
+    bombGfx.fillCircle(sx, sy, radius);
+    bombGfx.lineStyle(2, 0x000000, 1);
+    bombGfx.strokeCircle(sx, sy, radius);
+    bombGfx.setAlpha(b.armed ? 1 : 0.6);
+    scene.bombLayer.add(bombGfx);
+
+    const bombText = scene.add.text(
+      sx,
+      sy,
+      "B",
+      { fontSize: "12px", color: "#000000", fontStyle: "bold" }
+    ).setOrigin(0.5);
+    bombText.setAlpha(b.armed ? 1 : 0.6);
+    scene.bombLayer.add(bombText);
   });
 
   // projectiles
@@ -478,9 +533,12 @@ function renderHUDHtml(snap) {
   }
 
   // --- legend ---
-  const desiredLegend = IS_MOBILE
-    ? "FIRE shoots.\nACTION is context-aware (PICK/USE)."
-    : "SPACE=SHOOT/PICK, E=USE ITEM";
+  const mapPrefix = snap.mapName ? `Map: ${snap.mapName}\n` : "";
+  const desiredLegend = mapPrefix + (
+    IS_MOBILE
+      ? "FIRE shoots.\nACTION is context-aware (PICK/USE)."
+      : "SPACE=SHOOT/PICK, E=USE ITEM"
+  );
   if (desiredLegend !== lastLegendRendered) {
     legendEl.textContent = desiredLegend;
     lastLegendRendered = desiredLegend;
@@ -572,6 +630,18 @@ function updateActionControl(snap) {
     }
   }
 
+  if (!canPick && snap.searchables && snap.searchables.length > 0) {
+    for (const obj of snap.searchables) {
+      if (obj.used) continue;
+      const dx = me.x - obj.x;
+      const dy = me.y - obj.y;
+      if (dx * dx + dy * dy < PICK_RADIUS_SQR) {
+        canPick = true;
+        break;
+      }
+    }
+  }
+
   if (canPick) {
     currentAction = { type: "PICK", enabled: true };
     btnAction.textContent = "PICK";
@@ -583,7 +653,13 @@ function updateActionControl(snap) {
       const item = snap.yourInventory[selectedInvIndex];
       const name = (item.label || item.id || "").toUpperCase();
       // more specific label for trap kits
-      btnAction.textContent = (name.includes("TRAP")) ? "PLACE" : "USE";
+      if (name.includes("TRAP")) {
+        btnAction.textContent = "PLACE";
+      } else if (name.includes("BOMB")) {
+        btnAction.textContent = "DROP";
+      } else {
+        btnAction.textContent = "USE";
+      }
       btnAction.disabled = false;
     } else {
       currentAction = { type: "USE", enabled: false };
@@ -644,6 +720,9 @@ function getItemDescription(nameRaw) {
   }
   if (name.includes("MAP")) {
     return "MAP:\nShows where Intel, Key and Trap Kit are.";
+  }
+  if (name.includes("BOMB")) {
+    return "BOMB:\nDrop to create a lethal trap. Detonates on enemies who touch it.";
   }
   if (name.includes("KEY")) {
     return "KEY:\nNeeded to unlock EXIT.";
