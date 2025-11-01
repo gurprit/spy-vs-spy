@@ -95,8 +95,10 @@ function create() {
   // layers
   scene.roomLayer = scene.add.layer();
   scene.doorLayer = scene.add.layer();
+  scene.searchableLayer = scene.add.layer();
   scene.itemLayer = scene.add.layer();
   scene.trapLayer = scene.add.layer();
+  scene.bombLayer = scene.add.layer();
   scene.playerLayer = scene.add.layer();
   scene.projectileLayer = scene.add.layer();
   scene.winLayer = scene.add.layer();
@@ -107,6 +109,7 @@ function create() {
 
   // mobile joystick vector
   scene.joyVec = { x: 0, y: 0 };
+  scene.lastJoyVec = { x: 1, y: 0 }; // Default shoot-right
 
   if (IS_MOBILE) {
     setupMobileJoystick(scene);
@@ -183,6 +186,19 @@ function update(time, delta) {
         if (selectedInvIndex !== null) {
           ws.send(JSON.stringify({ t: "useItem", which: selectedInvIndex }));
         }
+      }
+    }
+  }
+
+  // Check for nearby searchable objects
+  let canSearch = false;
+  if (snap.searchable && snap.searchable.length > 0) {
+    for (const obj of snap.searchable) {
+      const dx = me.x - obj.x;
+      const dy = me.y - obj.y;
+      if (dx * dx + dy * dy < PICK_RADIUS_SQR) {
+        canSearch = true;
+        break;
       }
     }
   }
@@ -287,6 +303,11 @@ function setupMobileJoystick(scene) {
 
     scene.joyVec.x = nx / joyRadius;
     scene.joyVec.y = ny / joyRadius;
+
+    if (Math.abs(scene.joyVec.x) > 0.1 || Math.abs(scene.joyVec.y) > 0.1) {
+      scene.lastJoyVec.x = scene.joyVec.x;
+      scene.lastJoyVec.y = scene.joyVec.y;
+    }
   }
 
   function resetKnob() {
@@ -302,7 +323,14 @@ function setupMobileJoystick(scene) {
 // ---------------------------------------------------------
 function handleFire() {
   if (ws && ws.readyState === 1) {
-    ws.send(JSON.stringify({ t: "shoot" }));
+    const payload = { t: "shoot" };
+
+    if (IS_MOBILE) {
+      payload.dx = sceneRef.lastJoyVec.x;
+      payload.dy = sceneRef.lastJoyVec.y;
+    }
+
+    ws.send(JSON.stringify(payload));
   }
 }
 
@@ -312,6 +340,9 @@ function handleAction() {
   switch (currentAction.type) {
     case "PICK":
       ws.send(JSON.stringify({ t: "pickup" }));
+      break;
+    case "SEARCH":
+      ws.send(JSON.stringify({ t: "search" }));
       break;
     case "USE":
       if (selectedInvIndex !== null) {
@@ -327,8 +358,10 @@ function handleAction() {
 function drawRoom(scene, snap) {
   scene.roomLayer.removeAll(true);
   scene.doorLayer.removeAll(true);
+  scene.searchableLayer.removeAll(true);
   scene.itemLayer.removeAll(true);
   scene.trapLayer.removeAll(true);
+  scene.bombLayer.removeAll(true);
   scene.projectileLayer.removeAll(true);
 
   const { roomX, roomY, roomW, roomH } = getRoomScreenBox(snap.roomW, snap.roomH);
@@ -367,6 +400,25 @@ function drawRoom(scene, snap) {
       { fontSize: "8px", color: "#000000" }
     ).setOrigin(0.5);
     scene.doorLayer.add(doorLabel);
+  });
+
+  // searchable
+  (snap.searchable || []).forEach(s => {
+    const { sx, sy } = roomToScreen(s.x, s.y, snap.roomW, snap.roomH);
+    const { sx: sx2, sy: sy2 } = roomToScreen(s.x + s.w, s.y + s.h, snap.roomW, snap.roomH);
+
+    const searchGfx = scene.add.graphics();
+    searchGfx.fillStyle(0x964B00, 1);
+    searchGfx.fillRect(sx, sy, sx2 - sx, sy2 - sy);
+    scene.searchableLayer.add(searchGfx);
+
+    const searchLabel = scene.add.text(
+      sx + (sx2 - sx) / 2,
+      sy + (sy2 - sy) / 2,
+      s.label,
+      { fontSize: "8px", color: "#FFFFFF" }
+    ).setOrigin(0.5);
+    scene.searchableLayer.add(searchLabel);
   });
 
   // items
@@ -410,6 +462,25 @@ function drawRoom(scene, snap) {
       { fontSize: "10px", color: "#000000", align: "center" }
     ).setOrigin(0.5);
     scene.trapLayer.add(trapLabel);
+  });
+
+  // bombs
+  (snap.bombs || []).forEach(b => {
+    const { sx, sy } = roomToScreen(b.x, b.y, snap.roomW, snap.roomH);
+    const size = 24;
+
+    const bombGfx = scene.add.graphics();
+    bombGfx.fillStyle(0x000000, 1);
+    bombGfx.fillCircle(sx, sy, size/2);
+    scene.bombLayer.add(bombGfx);
+
+    const bombLabel = scene.add.text(
+      sx,
+      sy,
+      "B",
+      { fontSize: "10px", color: "#FFFFFF", align: "center" }
+    ).setOrigin(0.5);
+    scene.bombLayer.add(bombLabel);
   });
 
   // projectiles
@@ -572,7 +643,11 @@ function updateActionControl(snap) {
     }
   }
 
-  if (canPick) {
+  if (canSearch) {
+    currentAction = { type: "SEARCH", enabled: true };
+    btnAction.textContent = "SEARCH";
+    btnAction.disabled = false;
+  } else if (canPick) {
     currentAction = { type: "PICK", enabled: true };
     btnAction.textContent = "PICK";
     btnAction.disabled = false;

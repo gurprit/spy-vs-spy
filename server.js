@@ -41,7 +41,10 @@ const ROOM_TEMPLATES = {
     w: 320, h: 200,
     items: [
       { id: "bomb",   x: 80,  y: 100, label: "BOMB" },
-      { id: "spring", x: 120, y: 140, label: "SPRING" } // NEW: door trap tool
+      { id: "spring", x: 120, y: 140, label: "SPRING" }
+    ],
+    searchable: [
+        { x: 160, y: 50, w: 40, h: 30, label: "Desk", items: ["map", "wire"] }
     ],
     doors: [
       { x:300, y:80, w:20, h:40, targetRoom:"CONTROL", targetX:20,  targetY:100 }
@@ -51,8 +54,11 @@ const ROOM_TEMPLATES = {
   CONTROL: {
     w: 320, h: 200,
     items: [
-      { id: "map",  x:160, y:60,  label:"MAP" },              // NEW: radar intel
-      { id: "wire", x:220, y:120, label:"WIRE CUTTER" }       // future: disarm traps
+      { id: "map",  x:160, y:60,  label:"MAP" },
+      { id: "wire", x:220, y:120, label:"WIRE CUTTER" }
+    ],
+    searchable: [
+        { x: 80, y: 150, w: 30, h: 40, label: "Bookcase", items: ["trap", "disguise"] }
     ],
     doors: [
       { x:0,   y:80,  w:20, h:40, targetRoom:"ARMORY",  targetX:300, targetY:100 },
@@ -66,6 +72,9 @@ const ROOM_TEMPLATES = {
       { id: "brief", x:160, y:100, label:"INTEL" },
       { id: "key",   x:260, y:160, label:"KEY" }
     ],
+    searchable: [
+        { x: 50, y: 80, w: 40, h: 30, label: "Desk", items: ["bomb", "spring"] }
+    ],
     doors: [
       { x:140, y:0,   w:40, h:20, targetRoom:"CONTROL",  targetX:160, targetY:180 },
       { x:300, y:80,  w:20, h:40, targetRoom:"WORKSHOP", targetX:20,  targetY:100 },
@@ -76,8 +85,11 @@ const ROOM_TEMPLATES = {
   WORKSHOP: {
     w: 320, h: 200,
     items: [
-      { id: "paint", x:80,  y:60,  label:"DISGUISE" }, // NEW: lets you hide ID
-      { id: "trap",  x:200, y:120, label:"TRAP KIT" }  // our floor trap
+      { id: "paint", x:80,  y:60,  label:"DISGUISE" },
+      { id: "trap",  x:200, y:120, label:"TRAP KIT" }
+    ],
+    searchable: [
+        { x: 250, y: 80, w: 30, h: 40, label: "Bookcase", items: ["key", "intel"] }
     ],
     doors: [
       { x:0, y:80, w:20, h:40, targetRoom:"INTEL", targetX:300, targetY:100 }
@@ -157,8 +169,11 @@ const STATE = {
   players: new Map(),    // id -> player
   roomItems: {},         // roomName -> [{id,x,y,label}, ...]
   roomTraps: {},         // roomName -> [{id,x,y,owner,armed}, ...]  (floor traps)
+  roomBombs: {},         // roomName -> [{id,x,y,owner}, ...]
   roomDoorTraps: {},     // NEW: roomName -> [{doorIndex, owner, armed, type}]
   roomProjectiles: {},   // roomName -> [{id,owner,x,y,vx,vy}, ...]
+  roomSearchables: {},   // roomName -> [{x,y,w,h,label,items}, ...]
+  roomDoors: {},         // roomName -> [{x,y,w,h,targetRoom,targetX,targetY}, ...]
   roundOver: false,
   winner: null,          // { id, type }
   roundResetAt: 0
@@ -172,15 +187,63 @@ resetRooms();
 function resetRooms() {
   STATE.roomItems = {};
   STATE.roomTraps = {};
+  STATE.roomBombs = {};
   STATE.roomDoorTraps = {};
   STATE.roomProjectiles = {};
+  STATE.roomSearchables = {};
+  STATE.roomDoors = {};
 
-  for (const roomName of Object.keys(ROOM_TEMPLATES)) {
+  const roomNames = Object.keys(ROOM_TEMPLATES);
+  for (const roomName of roomNames) {
     const tmpl = ROOM_TEMPLATES[roomName];
     STATE.roomItems[roomName] = tmpl.items.map(it => ({ ...it }));
+    STATE.roomSearchables[roomName] = tmpl.searchable ? tmpl.searchable.map(s => ({ ...s })) : [];
+    STATE.roomDoors[roomName] = tmpl.doors.map(d => ({ ...d }));
     STATE.roomTraps[roomName] = [];
+    STATE.roomBombs[roomName] = [];
     STATE.roomDoorTraps[roomName] = [];
     STATE.roomProjectiles[roomName] = [];
+  }
+
+    for (const roomName of roomNames) {
+        const room = STATE.roomDoors[roomName];
+        if (room) {
+            for (const door of room) {
+                const targetRoom = roomNames[Math.floor(Math.random() * roomNames.length)];
+                door.targetRoom = targetRoom;
+            }
+        }
+    }
+}
+
+function applyBombIfHit(player, tNow) {
+  const roomName = player.room;
+  const bombs = STATE.roomBombs[roomName];
+  if (!bombs || !bombs.length) return;
+
+  for (let i = 0; i < bombs.length; i++) {
+    const bomb = bombs[i];
+
+    const dist = Math.hypot(player.x - bomb.x, player.y - bomb.y);
+
+    if (player.id === bomb.owner) {
+      continue;
+    }
+
+    if (dist <= TRIGGER_RADIUS) {
+      console.log(
+        `[server] BOMB TRIGGERED ${bomb.id} on player ${player.id} in ${roomName} at (${bomb.x},${bomb.y})`
+      );
+
+      const killer = STATE.players.get(bomb.owner);
+      if (killer) {
+        killer.score++;
+      }
+      respawnPlayer(player);
+
+      bombs.splice(i, 1);
+      break;
+    }
   }
 }
 
@@ -270,7 +333,11 @@ wss.on("connection", (ws) => {
     }
     if (m.t === "shoot") {
       console.log(`[server] ${player.id} requests SHOOT`);
-      handleShoot(player);
+      handleShoot(player, m);
+    }
+    if (m.t === "search") {
+      console.log(`[server] ${player.id} requests SEARCH`);
+      handleSearch(player);
     }
   });
 
@@ -389,6 +456,29 @@ function handleUseItem(player, whichIndexRaw) {
   // normalize id/label for easier matching
   const name = (item.id || item.label || "").toUpperCase();
 
+  // BOMB
+  if (name.includes("BOMB")) {
+    const roomName = player.room;
+    const bombsInRoom = STATE.roomBombs[roomName];
+    if (!bombsInRoom) return;
+
+    const newBomb = {
+      id: "bomb-" + crypto.randomUUID().slice(0, 8),
+      owner: player.id,
+      x: player.x,
+      y: player.y,
+    };
+
+    bombsInRoom.push(newBomb);
+    console.log(
+      `[server] ${player.id} PLACED BOMB ${newBomb.id} in ${roomName} at (${newBomb.x},${newBomb.y})`
+    );
+
+    // consume the bomb
+    inv.splice(whichIndex, 1);
+    return;
+  }
+
   // TRAP KIT
   if (name.includes("TRAP")) {
     const roomName = player.room;
@@ -452,14 +542,14 @@ function handleUseItem(player, whichIndexRaw) {
 // --------------------------------------------------
 function tryArmDoorTrap(player) {
   const roomName = player.room;
-  const roomDef = ROOM_TEMPLATES[roomName];
-  if (!roomDef || !roomDef.doors) return false;
+  const doors = STATE.roomDoors[roomName];
+  if (!doors || doors.length === 0) return false;
 
   // find closest door the spy is standing near
   let bestDoorIndex = -1;
   let bestDist = Infinity;
 
-  roomDef.doors.forEach((door, i) => {
+  doors.forEach((door, i) => {
     // center of door rect
     const cx = door.x + door.w / 2;
     const cy = door.y + door.h / 2;
@@ -491,7 +581,7 @@ function tryArmDoorTrap(player) {
 // --------------------------------------------------
 // Shooting
 // --------------------------------------------------
-function handleShoot(player) {
+function handleShoot(player, msg) {
   const tNow = now();
   if (player.stunnedUntil > tNow) return;
   if (tNow - player.lastShotTime < FIRE_RATE_MS) return;
@@ -503,8 +593,10 @@ function handleShoot(player) {
   const py = player.y;
 
   // velocity is based on player's current movement direction, or a default if still
-  let pvx = player.vx;
-  let pvy = player.vy;
+  // Mobile sends its own last-known direction for shooting.
+  let pvx = msg.dx || player.vx;
+  let pvy = msg.dy || player.vy;
+
   if (pvx === 0 && pvy === 0) {
     pvx = 1; // default to shooting right
   }
@@ -512,6 +604,26 @@ function handleShoot(player) {
 
   const proj = {
     id: "proj-" + crypto.randomUUID().slice(0, 8),
+// --------------------------------------------------
+// Search logic
+// --------------------------------------------------
+function handleSearch(player) {
+    const roomName = player.room;
+    const room = STATE.roomSearchables[roomName];
+    if (!room || room.length === 0) return;
+
+    for (let i = 0; i < room.length; i++) {
+        const obj = room[i];
+        const dist = Math.hypot(player.x - obj.x, player.y - obj.y);
+
+        if (dist <= PICK_RADIUS) {
+            const item = obj.items[Math.floor(Math.random() * obj.items.length)];
+            player.inventory.push({ id: item, label: item.toUpperCase() });
+            room.splice(i, 1);
+            break;
+        }
+    }
+}
     owner: player.id,
     x: px,
     y: py,
@@ -555,13 +667,14 @@ function step(dt) {
 
     // clamp
     const def = ROOM_TEMPLATES[p.room];
+    const doors = STATE.roomDoors[p.room];
     p.x = Math.max(16, Math.min(def.w - 16, p.x));
     p.y = Math.max(16, Math.min(def.h - 16, p.y));
 
     // door teleport
     if (!STATE.roundOver && p.stunnedUntil <= tNow) {
-      for (let dIndex = 0; dIndex < def.doors.length; dIndex++) {
-        const door = def.doors[dIndex];
+      for (let dIndex = 0; dIndex < doors.length; dIndex++) {
+        const door = doors[dIndex];
         const inside =
           p.x > door.x &&
           p.x < door.x + door.w &&
@@ -585,6 +698,7 @@ function step(dt) {
 
     if (!STATE.roundOver) {
       applyFloorTrapIfHit(p, tNow);
+      applyBombIfHit(p, tNow);
     }
   });
 
@@ -828,6 +942,7 @@ function snapshotFor(playerId) {
 
   const itemsInRoom = STATE.roomItems[roomName] || [];
   const floorTrapsInRoom = STATE.roomTraps[roomName] || [];
+  const bombsInRoom = STATE.roomBombs[roomName] || [];
   const projectilesInRoom = STATE.roomProjectiles[roomName] || [];
 
   // Only show YOUR floor traps
@@ -891,11 +1006,19 @@ function snapshotFor(playerId) {
     roomW: roomDef.w,
     roomH: roomDef.h,
 
-    doors: roomDef.doors.map((d) => ({
+    doors: STATE.roomDoors[roomName].map((d) => ({
       x: d.x,
       y: d.y,
       w: d.w,
       h: d.h
+    })),
+
+    searchable: STATE.roomSearchables[roomName].map(s => ({
+        x: s.x,
+        y: s.y,
+        w: s.w,
+        h: s.h,
+        label: s.label
     })),
 
     items: itemsInRoom.map(it => ({
@@ -912,6 +1035,12 @@ function snapshotFor(playerId) {
     })),
 
     traps: visibleFloorTraps,
+
+    bombs: bombsInRoom.map(b => ({
+      id: b.id,
+      x: b.x,
+      y: b.y,
+    })),
 
     players: visiblePlayers,
 
