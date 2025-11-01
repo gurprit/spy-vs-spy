@@ -122,10 +122,12 @@
 
     /* mobile controls bar */
     #mobile-controls {
-      flex: 0 0 auto;
+      position: absolute;
+      bottom: 0;
+      width: 100%;
       background: var(--panel-bg);
       border-top: 1px solid var(--panel-border);
-      display: none; /* enabled via JS on mobile */
+      display: none;
       justify-content: space-between;
       align-items: center;
       gap: 12px;
