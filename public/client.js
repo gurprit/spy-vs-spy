@@ -182,23 +182,12 @@ function update(time, delta) {
       }
     }
     if (Phaser.Input.Keyboard.JustDown(scene.keys.E)) {
-      if (currentAction.type === "USE" && currentAction.enabled) {
+      if (currentAction.type === "SEARCH" && currentAction.enabled) {
+        ws.send(JSON.stringify({ t: "search" }));
+      } else if (currentAction.type === "USE" && currentAction.enabled) {
         if (selectedInvIndex !== null) {
           ws.send(JSON.stringify({ t: "useItem", which: selectedInvIndex }));
         }
-      }
-    }
-  }
-
-  // Check for nearby searchable objects
-  let canSearch = false;
-  if (snap.searchable && snap.searchable.length > 0) {
-    for (const obj of snap.searchable) {
-      const dx = me.x - obj.x;
-      const dy = me.y - obj.y;
-      if (dx * dx + dy * dy < PICK_RADIUS_SQR) {
-        canSearch = true;
-        break;
       }
     }
   }
@@ -638,6 +627,18 @@ function updateActionControl(snap) {
       const dy = me.y - item.y;
       if (dx * dx + dy * dy < PICK_RADIUS_SQR) {
         canPick = true;
+        break;
+      }
+    }
+  }
+
+  let canSearch = false;
+  if (snap.searchable && snap.searchable.length > 0) {
+    for (const obj of snap.searchable) {
+      const dx = me.x - obj.x;
+      const dy = me.y - obj.y;
+      if (dx * dx + dy * dy < PICK_RADIUS_SQR) {
+        canSearch = true;
         break;
       }
     }
