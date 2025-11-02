@@ -109,7 +109,7 @@ function create() {
 
   // movement input
   scene.cursors = scene.input.keyboard.createCursorKeys();
-  scene.keys = scene.input.keyboard.addKeys("W,A,S,D,E,SPACE");
+  scene.keys = scene.input.keyboard.addKeys("W,A,S,D,ENTER,SPACE");
 
   // mobile joystick vector
   scene.joyVec = { x: 0, y: 0 };
@@ -184,7 +184,7 @@ function update(time, delta) {
         handleFire();
       }
     }
-    if (Phaser.Input.Keyboard.JustDown(scene.keys.E)) {
+    if (Phaser.Input.Keyboard.JustDown(scene.keys.ENTER)) {
       if (currentAction.type === "USE" && currentAction.enabled) {
         if (selectedInvIndex !== null) {
           ws.send(JSON.stringify({ t: "useItem", which: selectedInvIndex }));
@@ -594,7 +594,7 @@ function renderHUDHtml(snap) {
   const desiredLegend = mapPrefix + (
     IS_MOBILE
       ? "FIRE shoots.\nACTION is context-aware (PICK/USE)."
-      : "SPACE=SHOOT/PICK, E=USE ITEM"
+      : "SPACE=SHOOT/PICK, ENTER=USE ITEM"
   );
   if (desiredLegend !== lastLegendRendered) {
     legendEl.textContent = desiredLegend;
