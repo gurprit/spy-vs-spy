@@ -394,7 +394,7 @@ function drawRoom(scene, snap) {
       sx,
       sy,
       it.label,
-      { fontSize: "18px", color: "#FFFFFF", align: "center" }
+      { fontSize: "16px", color: "#000000", align: "center" }
     ).setOrigin(0.5);
     scene.itemLayer.add(labelText);
   });
@@ -417,7 +417,7 @@ function drawRoom(scene, snap) {
       sx,
       sy,
       obj.label,
-      { fontSize: "8px", color: "#ffffff", align: "center", wordWrap: { width: boxW - 4 } }
+      { fontSize: "12px", color: "#ffffff", align: "center", wordWrap: { width: boxW - 4 } }
     ).setOrigin(0.5);
     if (obj.used) label.setAlpha(0.5);
     scene.searchableLayer.add(label);
@@ -439,7 +439,7 @@ function drawRoom(scene, snap) {
       sx,
       sy,
       "T",
-      { fontSize: "10px", color: "#000000", align: "center" }
+      { fontSize: "12px", color: "#000000", align: "center" }
     ).setOrigin(0.5);
     scene.trapLayer.add(trapLabel);
   });
