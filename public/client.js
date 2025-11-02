@@ -394,7 +394,7 @@ function drawRoom(scene, snap) {
       sx,
       sy,
       it.label,
-      { fontSize: "32px", color: "#000000", align: "center" }
+      { fontSize: "18px", color: "#FFFFFF", align: "center" }
     ).setOrigin(0.5);
     scene.itemLayer.add(labelText);
   });
