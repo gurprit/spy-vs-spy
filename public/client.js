@@ -117,8 +117,8 @@ function create() {
   if (IS_MOBILE) {
     setupMobileJoystick(scene);
     // hook mobile HTML buttons
-    btnFire.addEventListener("pointerdown", handleFire);
-    btnAction.addEventListener("pointerdown", handleAction);
+    setupMobileButton(btnFire, handleFire);
+    setupMobileButton(btnAction, handleAction);
   }
 
   // websocket setup
@@ -264,19 +264,38 @@ function setupMobileJoystick(scene) {
   const joyRadius = base.offsetWidth / 2;
   const knobRadius = knob.offsetWidth / 2;
 
+  let activeTouchId = null;
+
   base.addEventListener("touchstart", (e) => {
+    if (activeTouchId !== null) return;
+    const touch = e.changedTouches[0];
+    if (!touch) return;
+    activeTouchId = touch.identifier;
     isDragging = true;
-    updateKnob(e.touches[0]);
-  });
+    updateKnob(touch);
+    e.preventDefault();
+  }, { passive: false });
+
   base.addEventListener("touchmove", (e) => {
-    if (isDragging) {
-      updateKnob(e.touches[0]);
-    }
-  });
-  base.addEventListener("touchend", () => {
+    if (!isDragging || activeTouchId === null) return;
+    const touch = Array.from(e.touches).find(t => t.identifier === activeTouchId);
+    if (!touch) return;
+    updateKnob(touch);
+    e.preventDefault();
+  }, { passive: false });
+
+  const endTouch = (e) => {
+    if (activeTouchId === null) return;
+    const ended = Array.from(e.changedTouches).some(t => t.identifier === activeTouchId);
+    if (!ended) return;
     isDragging = false;
+    activeTouchId = null;
     resetKnob();
-  });
+    e.preventDefault();
+  };
+
+  base.addEventListener("touchend", endTouch, { passive: false });
+  base.addEventListener("touchcancel", endTouch, { passive: false });
 
   function updateKnob(touch) {
     const rect = base.getBoundingClientRect();
@@ -301,6 +320,21 @@ function setupMobileJoystick(scene) {
     scene.joyVec.x = 0;
     scene.joyVec.y = 0;
   }
+}
+
+function setupMobileButton(button, handler) {
+  if (!button) return;
+
+  const onTouchStart = (e) => {
+    handler();
+    e.preventDefault();
+  };
+
+  button.addEventListener("touchstart", onTouchStart, { passive: false });
+  button.addEventListener("pointerdown", (e) => {
+    if (e.pointerType === "touch") return;
+    handler();
+  });
 }
 
 // ---------------------------------------------------------
@@ -380,6 +414,29 @@ function drawRoom(scene, snap) {
   // items
   (snap.items || []).forEach(it => {
     const { sx, sy } = roomToScreen(it.x, it.y, snap.roomW, snap.roomH);
+    if (it.id === "escape") {
+      const doorW = 40;
+      const doorH = 70;
+      const topY = sy - doorH / 2;
+      const doorGfx = scene.add.graphics();
+      doorGfx.fillStyle(0x1f2a44, 1);
+      doorGfx.fillRect(sx - doorW / 2, topY, doorW, doorH);
+      doorGfx.lineStyle(2, 0xffcc33, 1);
+      doorGfx.strokeRect(sx - doorW / 2, topY, doorW, doorH);
+      doorGfx.fillStyle(0xffcc33, 1);
+      doorGfx.fillCircle(sx + doorW / 4, sy, 3);
+      scene.itemLayer.add(doorGfx);
+
+      const exitLabel = scene.add.text(
+        sx,
+        topY - 12,
+        "EXIT",
+        { fontSize: "14px", color: "#ffcc33", fontStyle: "bold" }
+      ).setOrigin(0.5);
+      scene.itemLayer.add(exitLabel);
+      return;
+    }
+
     const boxW = 50;
     const boxH = 20;
 
@@ -586,16 +643,32 @@ function renderHUDHtml(snap) {
 
   // --- radar ---
   const radarData = {
-    intel: snap.intelLocation ? snap.intelLocation.room : null,
-    key: snap.keyLocation ? snap.keyLocation.room : null,
-    trap: snap.trapKitLocation ? snap.trapKitLocation.room : null
+    intel: snap.intelLocation || null,
+    key: snap.keyLocation || null,
+    trap: snap.trapKitLocation || null
   };
   const radarJson = JSON.stringify(radarData);
   if (radarJson !== lastRadarRendered) {
-    if (radarData.intel || radarData.key || radarData.trap) {
+    const hasIntel = !!radarData.intel;
+    const hasKey = !!radarData.key;
+    const hasTrap = !!radarData.trap;
+    if (hasIntel || hasKey || hasTrap) {
+      const formatRadarLine = (label, loc) => {
+        if (!loc) return `${label}: ?`;
+        const roomStr = loc.room || "?";
+        if (loc.carriedBy) {
+          return `${label}: ${roomStr} (carried by ${loc.carriedBy})`;
+        }
+        return `${label}: ${roomStr}`;
+      };
+
       radarBoxEl.style.display = "block";
-      radarBoxEl.textContent =
-        `RADAR:\nIntel: ${radarData.intel || "?"}\nKey: ${radarData.key || "?"}\nTrap Kit: ${radarData.trap || "?"}`;
+      radarBoxEl.textContent = [
+        "RADAR:",
+        formatRadarLine("Intel", radarData.intel),
+        formatRadarLine("Key", radarData.key),
+        formatRadarLine("Trap Kit", radarData.trap)
+      ].join("\n");
     } else {
       radarBoxEl.style.display = "none";
     }
@@ -617,34 +690,38 @@ function updateActionControl(snap) {
     return;
   }
 
-  // Check for nearby items
-  let canPick = false;
+  // Check for nearby items/searchables
+  let actionContext = null; // "item" or "searchable"
+  let closestDistSq = Infinity;
+
   if (snap.items && snap.items.length > 0) {
     for (const item of snap.items) {
       const dx = me.x - item.x;
       const dy = me.y - item.y;
-      if (dx * dx + dy * dy < PICK_RADIUS_SQR) {
-        canPick = true;
-        break;
+      const distSq = dx * dx + dy * dy;
+      if (distSq < PICK_RADIUS_SQR && distSq < closestDistSq) {
+        closestDistSq = distSq;
+        actionContext = "item";
       }
     }
   }
 
-  if (!canPick && snap.searchables && snap.searchables.length > 0) {
+  if (snap.searchables && snap.searchables.length > 0) {
     for (const obj of snap.searchables) {
       if (obj.used) continue;
       const dx = me.x - obj.x;
       const dy = me.y - obj.y;
-      if (dx * dx + dy * dy < PICK_RADIUS_SQR) {
-        canPick = true;
-        break;
+      const distSq = dx * dx + dy * dy;
+      if (distSq < PICK_RADIUS_SQR && distSq < closestDistSq) {
+        closestDistSq = distSq;
+        actionContext = "searchable";
       }
     }
   }
 
-  if (canPick) {
-    currentAction = { type: "PICK", enabled: true };
-    btnAction.textContent = "PICK";
+  if (actionContext) {
+    currentAction = { type: "PICK", enabled: true, context: actionContext };
+    btnAction.textContent = actionContext === "searchable" ? "SEARCH" : "PICK";
     btnAction.disabled = false;
   } else {
     // Context is USE/DROP

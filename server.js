@@ -23,7 +23,7 @@ const SHOTS_TO_KILL = 3;
 const FIRE_RATE_MS = 500;   // half-second between shots
 const PICK_RADIUS = 20;     // pickup distance
 const DOOR_ARM_RADIUS = 24; // NEW: how close you must be to arm a door with SPRING
-const WIN_RADIUS = 24;      // distance to exit pad to escape
+const WIN_RADIUS = 24;      // distance to exit door to escape
 const ROUND_END_FREEZE_MS = 3000; // pause before new round
 const SCORE_PER_WIN = 1;
 const SCORE_TARGET = 5;
@@ -114,7 +114,7 @@ const MAP_VARIANTS = [
       EXIT: {
         w: 320, h: 200,
         items: [
-          { id: "escape", x:160, y:100, label:"EXIT PAD" }
+          { id: "escape", x:160, y:100, label:"EXIT DOOR" }
         ],
         searchables: [
           { id: "exit-crate", label: "CRATE", x: 60, y: 160 }
@@ -255,7 +255,7 @@ const MAP_VARIANTS = [
       EXIT: {
         w: 320, h: 200,
         items: [
-          { id: "escape", x: 160, y: 100, label: "EXIT PAD" }
+          { id: "escape", x: 160, y: 100, label: "EXIT DOOR" }
         ],
         searchables: [
           { id: "exit-locker", label: "LOCKER", x: 260, y: 60 }
@@ -384,7 +384,7 @@ const MAP_VARIANTS = [
       EXIT: {
         w: 320, h: 200,
         items: [
-          { id: "escape", x: 160, y: 100, label: "EXIT PAD" }
+          { id: "escape", x: 160, y: 100, label: "EXIT DOOR" }
         ],
         searchables: [
           { id: "exit-cache", label: "CACHE", x: 260, y: 60 }
@@ -1404,6 +1404,20 @@ function findItemLocation(idMatch, labelMatch) {
       }
     }
   }
+
+  // If not on the floor, see if a player is carrying it.
+  for (const player of STATE.players.values()) {
+    const hasItem = player.inventory.some((it) => {
+      return it.id === idMatch || it.label === labelMatch;
+    });
+    if (hasItem) {
+      return {
+        room: player.room,
+        carriedBy: player.shortId
+      };
+    }
+  }
+
   return null;
 }
 
