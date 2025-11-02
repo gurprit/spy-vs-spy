@@ -521,6 +521,45 @@ function resetRooms() {
   }
 }
 
+function dropInventory(player) {
+  const items = player.inventory || [];
+  if (!items.length) return;
+
+  const roomName = player.room;
+  if (!STATE.roomItems[roomName]) {
+    STATE.roomItems[roomName] = [];
+  }
+
+  const roomDef = ROOM_TEMPLATES[roomName];
+  const baseX = player.x;
+  const baseY = player.y;
+  const scatterRadius = 12;
+
+  items.forEach((item, index) => {
+    const angle = (Math.PI * 2 * index) / Math.max(items.length, 1);
+    let dropX = baseX + Math.cos(angle) * scatterRadius;
+    let dropY = baseY + Math.sin(angle) * scatterRadius;
+
+    if (roomDef) {
+      dropX = Math.max(16, Math.min(roomDef.w - 16, dropX));
+      dropY = Math.max(16, Math.min(roomDef.h - 16, dropY));
+    }
+
+    STATE.roomItems[roomName].push({
+      id: item.id,
+      label: item.label,
+      x: dropX,
+      y: dropY
+    });
+
+    console.log(
+      `[server] ${player.id} dropped ${item.label} in ${roomName} at (${dropX.toFixed(1)},${dropY.toFixed(1)})`
+    );
+  });
+
+  player.inventory = [];
+}
+
 function respawnPlayer(p) {
   const s = randSpawn();
   p.room = s.room;
@@ -1024,6 +1063,7 @@ function step(dt) {
             if (killer) {
               killer.score++;
             }
+            dropInventory(p);
             respawnPlayer(p);
           }
           break; // projectile is gone, stop checking this projectile
@@ -1171,6 +1211,7 @@ function applyBombsIfHit(player, tNow) {
       owner.score++;
     }
 
+    dropInventory(player);
     respawnPlayer(player);
     break;
   }
