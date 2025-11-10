@@ -18,13 +18,12 @@ const invListEl      = document.getElementById("inventory-list");
 const itemDescEl     = document.getElementById("item-desc-box");
 const radarBoxEl     = document.getElementById("radar-box");
 const mobileControls = document.getElementById("mobile-controls");
-const btnFire        = document.getElementById("btn-fire");
 const btnAction      = document.getElementById("btn-action");
 
-// show mobile buttons if mobile
-if (IS_MOBILE) {
+// show mobile action bar if mobile
+if (IS_MOBILE && mobileControls) {
   mobileControls.style.display = "flex";
-} else {
+} else if (mobileControls) {
   mobileControls.style.display = "none";
 }
 
@@ -76,6 +75,24 @@ let latest = {
 const renderPlayers = new Map();
 let sceneRef = null;
 
+// pointer / tap movement + firing state
+let moveTarget = null; // { x, y, room }
+let autoFireInterval = null;
+let autoFirePointerId = null;
+let autoFirePointerType = null;
+let longPressTimer = null;
+let longPressPointerId = null;
+let lastTapTime = 0;
+let lastTapPointerType = null;
+const lastTapPos = { x: 0, y: 0 };
+const longPressStartPos = { x: 0, y: 0 };
+
+const DOUBLE_TAP_MAX_MS = 300;
+const DOUBLE_TAP_MAX_DIST = 28;
+const LONG_PRESS_DELAY_MS = 450;
+const AUTO_FIRE_INTERVAL_MS = 520;
+const LONG_PRESS_MOVE_CANCEL_DIST = 24;
+
 // ---------------------------------------------------------
 // Phaser GAME
 // ---------------------------------------------------------
@@ -111,14 +128,22 @@ function create() {
   scene.cursors = scene.input.keyboard.createCursorKeys();
   scene.keys = scene.input.keyboard.addKeys("W,A,S,D,ENTER,SPACE");
 
-  // mobile joystick vector
-  scene.joyVec = { x: 0, y: 0 };
+  if (scene.input.mouse) {
+    scene.input.mouse.disableContextMenu();
+  }
 
-  if (IS_MOBILE) {
-    setupMobileJoystick(scene);
-    // hook mobile HTML buttons
-    setupMobileButton(btnFire, handleFire);
-    setupMobileButton(btnAction, handleAction);
+  scene.input.on("pointerdown", handlePointerDown);
+  scene.input.on("pointerup", handlePointerUp);
+  scene.input.on("pointerupoutside", handlePointerUp);
+  scene.input.on("pointercancel", handlePointerUp);
+  scene.input.on("pointermove", handlePointerMove);
+  scene.input.on("gameout", () => {
+    stopAutoFire();
+    cancelLongPress();
+  });
+
+  if (btnAction) {
+    setupActionButton(btnAction, handleAction);
   }
 
   // websocket setup
@@ -165,9 +190,23 @@ function update(time, delta) {
     if (scene.cursors.down.isDown || scene.keys.S.isDown) dy += 1;
   }
 
-  if (IS_MOBILE && scene.joyVec) {
-    dx += scene.joyVec.x;
-    dy += scene.joyVec.y;
+  const me = (latest.players || []).find(p => p.id === myId);
+  if (!me) {
+    moveTarget = null;
+  } else if (moveTarget) {
+    if (moveTarget.room && moveTarget.room !== me.room) {
+      moveTarget = null;
+    } else {
+      const tx = moveTarget.x - me.x;
+      const ty = moveTarget.y - me.y;
+      const dist = Math.hypot(tx, ty);
+      if (dist > 4) {
+        dx += tx / dist;
+        dy += ty / dist;
+      } else {
+        moveTarget = null;
+      }
+    }
   }
 
   seq++;
@@ -254,75 +293,124 @@ function update(time, delta) {
 }
 
 // ---------------------------------------------------------
-// Mobile joystick
+// Pointer / tap controls
 // ---------------------------------------------------------
-function setupMobileJoystick(scene) {
-  const base = document.getElementById("joystick-base");
-  const knob = document.getElementById("joystick-knob");
+function handlePointerDown(pointer) {
+  cancelLongPress();
 
-  let isDragging = false;
-  const joyRadius = base.offsetWidth / 2;
-  const knobRadius = knob.offsetWidth / 2;
-
-  let activeTouchId = null;
-
-  base.addEventListener("touchstart", (e) => {
-    if (activeTouchId !== null) return;
-    const touch = e.changedTouches[0];
-    if (!touch) return;
-    activeTouchId = touch.identifier;
-    isDragging = true;
-    updateKnob(touch);
-    e.preventDefault();
-  }, { passive: false });
-
-  base.addEventListener("touchmove", (e) => {
-    if (!isDragging || activeTouchId === null) return;
-    const touch = Array.from(e.touches).find(t => t.identifier === activeTouchId);
-    if (!touch) return;
-    updateKnob(touch);
-    e.preventDefault();
-  }, { passive: false });
-
-  const endTouch = (e) => {
-    if (activeTouchId === null) return;
-    const ended = Array.from(e.changedTouches).some(t => t.identifier === activeTouchId);
-    if (!ended) return;
-    isDragging = false;
-    activeTouchId = null;
-    resetKnob();
-    e.preventDefault();
-  };
-
-  base.addEventListener("touchend", endTouch, { passive: false });
-  base.addEventListener("touchcancel", endTouch, { passive: false });
-
-  function updateKnob(touch) {
-    const rect = base.getBoundingClientRect();
-    const dx = touch.clientX - (rect.left + joyRadius);
-    const dy = touch.clientY - (rect.top + joyRadius);
-    const mag = Math.hypot(dx, dy) || 1;
-    const clamped = Math.min(mag, joyRadius);
-
-    const nx = (dx / mag) * clamped;
-    const ny = (dy / mag) * clamped;
-
-    knob.style.left = (joyRadius - knobRadius + nx) + "px";
-    knob.style.top = (joyRadius - knobRadius + ny) + "px";
-
-    scene.joyVec.x = nx / joyRadius;
-    scene.joyVec.y = ny / joyRadius;
+  if (pointer.pointerType === "mouse" && pointer.rightButtonDown()) {
+    startAutoFire(pointer);
+    return;
   }
 
-  function resetKnob() {
-    knob.style.left = (joyRadius - knobRadius) + "px";
-    knob.style.top = (joyRadius - knobRadius) + "px";
-    scene.joyVec.x = 0;
-    scene.joyVec.y = 0;
+  const now = performance.now ? performance.now() : Date.now();
+  const dist = Phaser.Math.Distance.Between(pointer.x, pointer.y, lastTapPos.x, lastTapPos.y);
+  const isDouble = (
+    lastTapPointerType === pointer.pointerType &&
+    (now - lastTapTime) <= DOUBLE_TAP_MAX_MS &&
+    dist <= DOUBLE_TAP_MAX_DIST
+  );
+
+  if (isDouble) {
+    lastTapTime = 0;
+    lastTapPointerType = null;
+    handleFire();
+    stopAutoFire();
+    return;
+  }
+
+  setMoveTargetFromPointer(pointer);
+
+  lastTapTime = now;
+  lastTapPointerType = pointer.pointerType;
+  lastTapPos.x = pointer.x;
+  lastTapPos.y = pointer.y;
+
+  if (pointer.pointerType === "touch") {
+    scheduleLongPress(pointer);
   }
 }
 
-function setupMobileButton(button, handler) {
+function handlePointerMove(pointer) {
+  if (pointer.pointerType === "mouse" && pointer.isDown && pointer.leftButtonDown()) {
+    setMoveTargetFromPointer(pointer);
+  } else if (pointer.pointerType === "touch" && pointer.isDown) {
+    setMoveTargetFromPointer(pointer);
+    if (pointer.id === longPressPointerId) {
+      const dist = Phaser.Math.Distance.Between(pointer.x, pointer.y, longPressStartPos.x, longPressStartPos.y);
+      if (dist > LONG_PRESS_MOVE_CANCEL_DIST) {
+        cancelLongPress();
+      }
+    }
+  }
+}
+
+function handlePointerUp(pointer) {
+  if (pointer.pointerType === "mouse" && pointer.button === 2) {
+    stopAutoFire(pointer);
+  }
+
+  if (pointer.pointerType === "touch") {
+    stopAutoFire(pointer);
+  }
+
+  if (pointer.id === longPressPointerId) {
+    cancelLongPress();
+  }
+}
+
+function setMoveTargetFromPointer(pointer) {
+  if (!latest || !latest.roomW || !latest.roomH) return;
+  const coords = screenToRoom(pointer.x, pointer.y, latest.roomW, latest.roomH);
+  if (!coords) return;
+  const me = (latest.players || []).find(p => p.id === myId);
+  moveTarget = {
+    x: coords.rx,
+    y: coords.ry,
+    room: me ? me.room : (latest.room || null)
+  };
+}
+
+function scheduleLongPress(pointer) {
+  cancelLongPress();
+  longPressPointerId = pointer.id;
+  longPressStartPos.x = pointer.x;
+  longPressStartPos.y = pointer.y;
+  longPressTimer = setTimeout(() => {
+    longPressTimer = null;
+    startAutoFire(pointer);
+  }, LONG_PRESS_DELAY_MS);
+}
+
+function cancelLongPress() {
+  if (longPressTimer) {
+    clearTimeout(longPressTimer);
+    longPressTimer = null;
+  }
+  longPressPointerId = null;
+}
+
+function startAutoFire(pointer) {
+  if (autoFireInterval) return;
+  autoFirePointerId = pointer ? pointer.id : null;
+  autoFirePointerType = pointer ? pointer.pointerType : null;
+  handleFire();
+  autoFireInterval = setInterval(() => handleFire(), AUTO_FIRE_INTERVAL_MS);
+}
+
+function stopAutoFire(pointer) {
+  if (!autoFireInterval) return;
+  if (pointer) {
+    if (autoFirePointerId !== null && pointer.id !== autoFirePointerId) return;
+    if (autoFirePointerType && pointer.pointerType !== autoFirePointerType) return;
+  }
+  clearInterval(autoFireInterval);
+  autoFireInterval = null;
+  autoFirePointerId = null;
+  autoFirePointerType = null;
+}
+
+function setupActionButton(button, handler) {
   if (!button) return;
 
   const onTouchStart = (e) => {
@@ -332,7 +420,7 @@ function setupMobileButton(button, handler) {
 
   button.addEventListener("touchstart", onTouchStart, { passive: false });
   button.addEventListener("pointerdown", (e) => {
-    if (e.pointerType === "touch") return;
+    if (e.pointerType === "touch" || e.button !== 0) return;
     handler();
   });
 }
@@ -593,8 +681,8 @@ function renderHUDHtml(snap) {
   const mapPrefix = snap.mapName ? `Map: ${snap.mapName}\n` : "";
   const desiredLegend = mapPrefix + (
     IS_MOBILE
-      ? "FIRE shoots.\nACTION is context-aware (PICK/USE)."
-      : "SPACE=SHOOT/PICK, ENTER=USE ITEM"
+      ? "Tap to move.\nDouble tap to fire.\nLong press to auto-fire.\nACTION handles PICK/USE."
+      : "Click to move. Right-click to fire (hold for auto-fire).\nSPACE=SHOOT/PICK, ENTER=USE ITEM"
   );
   if (desiredLegend !== lastLegendRendered) {
     legendEl.textContent = desiredLegend;
@@ -682,11 +770,14 @@ function renderHUDHtml(snap) {
 const PICK_RADIUS_SQR = 22 * 22; // client-side check radius (sq)
 
 function updateActionControl(snap) {
+  const button = btnAction;
   const me = (snap.players || []).find(p => p.id === myId);
   if (!me) {
     currentAction = { type: null, enabled: false };
-    btnAction.textContent = "ACTION";
-    btnAction.disabled = true;
+    if (button) {
+      button.textContent = "ACTION";
+      button.classList.add("disabled");
+    }
     return;
   }
 
@@ -721,8 +812,10 @@ function updateActionControl(snap) {
 
   if (actionContext) {
     currentAction = { type: "PICK", enabled: true, context: actionContext };
-    btnAction.textContent = actionContext === "searchable" ? "SEARCH" : "PICK";
-    btnAction.disabled = false;
+    if (button) {
+      button.textContent = actionContext === "searchable" ? "SEARCH" : "PICK";
+      button.classList.remove("disabled");
+    }
   } else {
     // Context is USE/DROP
     if (selectedInvIndex !== null && snap.yourInventory && snap.yourInventory.length > 0) {
@@ -730,18 +823,22 @@ function updateActionControl(snap) {
       const item = snap.yourInventory[selectedInvIndex];
       const name = (item.label || item.id || "").toUpperCase();
       // more specific label for trap kits
-      if (name.includes("TRAP")) {
-        btnAction.textContent = "PLACE";
-      } else if (name.includes("BOMB")) {
-        btnAction.textContent = "DROP";
-      } else {
-        btnAction.textContent = "USE";
+      if (button) {
+        if (name.includes("TRAP")) {
+          button.textContent = "PLACE";
+        } else if (name.includes("BOMB")) {
+          button.textContent = "DROP";
+        } else {
+          button.textContent = "USE";
+        }
+        button.classList.remove("disabled");
       }
-      btnAction.disabled = false;
     } else {
       currentAction = { type: "USE", enabled: false };
-      btnAction.textContent = "ACTION";
-      btnAction.disabled = true;
+      if (button) {
+        button.textContent = "ACTION";
+        button.classList.add("disabled");
+      }
     }
   }
 }
@@ -864,5 +961,17 @@ function roomToScreen(x, y, roomW, roomH) {
   return {
     sx: roomX + x * scale,
     sy: roomY + y * scale
+  };
+}
+
+function screenToRoom(sx, sy, roomW, roomH) {
+  const box = getRoomScreenBox(roomW, roomH);
+  if (!box || box.scale <= 0) return null;
+  const rx = (sx - box.roomX) / box.scale;
+  const ry = (sy - box.roomY) / box.scale;
+  return {
+    rx: Phaser.Math.Clamp(rx, 0, roomW),
+    ry: Phaser.Math.Clamp(ry, 0, roomH),
+    inside: sx >= box.roomX && sx <= (box.roomX + box.roomW) && sy >= box.roomY && sy <= (box.roomY + box.roomH)
   };
 }
