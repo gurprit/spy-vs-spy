@@ -128,30 +128,9 @@
       background: var(--panel-bg);
       border-top: 1px solid var(--panel-border);
       display: none;
-      justify-content: space-between;
+      justify-content: center;
       align-items: center;
-      gap: 12px;
       padding: 12px;
-    }
-
-    #joystick-base {
-      width: 80px;
-      height: 80px;
-      background: rgba(255,255,255,0.1);
-      border-radius: 50%;
-      position: relative;
-    }
-    #joystick-knob {
-      width: 40px;
-      height: 40px;
-      background: rgba(255,255,255,0.4);
-      border-radius: 50%;
-      position: absolute;
-      left: 20px;
-      top: 20px;
-    }
-    #action-buttons {
-      display: flex;
       gap: 12px;
     }
 
@@ -169,6 +148,11 @@
 
     .ctrl-btn:active {
       background: rgba(255,255,255,0.15);
+    }
+
+    .ctrl-btn.disabled {
+      opacity: 0.4;
+      pointer-events: none;
     }
 
     /* Desktop / wide screens: put HUD on the right */
@@ -223,13 +207,7 @@ ENTER=USE  T=TRAP  SPACE=PICK</div>
   </div>
 
   <div id="mobile-controls">
-    <div id="joystick-base">
-      <div id="joystick-knob"></div>
-    </div>
-    <div id="action-buttons">
-      <div class="ctrl-btn" id="btn-fire">FIRE</div>
-      <div class="ctrl-btn" id="btn-action">ACTION</div>
-    </div>
+    <div class="ctrl-btn" id="btn-action">ACTION</div>
   </div>
 
       <script src="https://cdn.jsdelivr.net/npm/phaser@3.80.1/dist/phaser.min.js"></script>
