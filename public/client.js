@@ -86,6 +86,7 @@ let lastTapTime = 0;
 let lastTapPointerType = null;
 const lastTapPos = { x: 0, y: 0 };
 const longPressStartPos = { x: 0, y: 0 };
+const lastAimDir = { x: 1, y: 0 };
 
 const DOUBLE_TAP_MAX_MS = 300;
 const DOUBLE_TAP_MAX_DIST = 28;
@@ -209,6 +210,12 @@ function update(time, delta) {
     }
   }
 
+  const aimMag = Math.hypot(dx, dy);
+  if (aimMag > 0.0001) {
+    lastAimDir.x = dx / aimMag;
+    lastAimDir.y = dy / aimMag;
+  }
+
   seq++;
   if (ws && ws.readyState === 1) {
     ws.send(JSON.stringify({ t: "input", seq, dx, dy }));
@@ -311,6 +318,8 @@ function handlePointerDown(pointer) {
     dist <= DOUBLE_TAP_MAX_DIST
   );
 
+  updateAimFromPointer(pointer);
+
   if (isDouble) {
     lastTapTime = 0;
     lastTapPointerType = null;
@@ -364,11 +373,31 @@ function setMoveTargetFromPointer(pointer) {
   const coords = screenToRoom(pointer.x, pointer.y, latest.roomW, latest.roomH);
   if (!coords) return;
   const me = (latest.players || []).find(p => p.id === myId);
+  updateAimToward(me, coords.rx, coords.ry);
   moveTarget = {
     x: coords.rx,
     y: coords.ry,
     room: me ? me.room : (latest.room || null)
   };
+}
+
+function updateAimToward(me, targetX, targetY) {
+  if (!me) return;
+  const dx = targetX - me.x;
+  const dy = targetY - me.y;
+  const mag = Math.hypot(dx, dy);
+  if (mag > 0.0001) {
+    lastAimDir.x = dx / mag;
+    lastAimDir.y = dy / mag;
+  }
+}
+
+function updateAimFromPointer(pointer) {
+  if (!pointer || !latest || !latest.roomW || !latest.roomH) return;
+  const coords = screenToRoom(pointer.x, pointer.y, latest.roomW, latest.roomH);
+  if (!coords) return;
+  const me = (latest.players || []).find(p => p.id === myId);
+  updateAimToward(me, coords.rx, coords.ry);
 }
 
 function scheduleLongPress(pointer) {
@@ -392,6 +421,9 @@ function cancelLongPress() {
 
 function startAutoFire(pointer) {
   if (autoFireInterval) return;
+  if (pointer) {
+    updateAimFromPointer(pointer);
+  }
   autoFirePointerId = pointer ? pointer.id : null;
   autoFirePointerType = pointer ? pointer.pointerType : null;
   handleFire();
@@ -430,7 +462,13 @@ function setupActionButton(button, handler) {
 // ---------------------------------------------------------
 function handleFire() {
   if (ws && ws.readyState === 1) {
-    ws.send(JSON.stringify({ t: "shoot" }));
+    const payload = { t: "shoot" };
+    const aimMag = Math.hypot(lastAimDir.x, lastAimDir.y);
+    if (aimMag > 0.0001) {
+      payload.aimX = lastAimDir.x;
+      payload.aimY = lastAimDir.y;
+    }
+    ws.send(JSON.stringify(payload));
   }
 }
 

@@ -648,7 +648,7 @@ wss.on("connection", (ws) => {
     }
     if (m.t === "shoot") {
       console.log(`[server] ${player.id} requests SHOOT`);
-      handleShoot(player);
+      handleShoot(player, m);
     }
   });
 
@@ -702,23 +702,9 @@ function handlePickup(player) {
     const dist = Math.hypot(player.x - it.x, player.y - it.y);
 
     if (dist <= PICK_RADIUS) {
-      console.log(
-        `[server] ${player.id} PICKED UP ${it.label} in ${roomName} at (${it.x},${it.y})`
-      );
-
-      player.inventory.push({ id: it.id, label: it.label });
-
-      const pickedTrapKit = (it.id === "trap" || it.label === "TRAP KIT");
-
-      // remove from floor
-      itemsInRoom.splice(i, 1);
-
-      // If they took the TRAP KIT, respawn a new one in a random room
-      if (pickedTrapKit) {
-        respawnTrapKitElsewhere(roomName);
+      if (pickupItemFromRoom(player, roomName, itemsInRoom, i)) {
+        interacted = true;
       }
-
-      interacted = true;
       break;
     }
   }
@@ -745,6 +731,50 @@ function handlePickup(player) {
       }
       interacted = true;
       break;
+    }
+  }
+}
+
+function pickupItemFromRoom(player, roomName, itemsInRoom, index, opts = {}) {
+  if (!itemsInRoom || index < 0 || index >= itemsInRoom.length) return false;
+
+  const item = itemsInRoom[index];
+  if (!item) return false;
+
+  const allowEscape = opts.allowEscape !== false;
+  if (!allowEscape && item.id === "escape") {
+    return false;
+  }
+
+  console.log(
+    `[server] ${player.id} PICKED UP ${item.label} in ${roomName} at (${item.x},${item.y})`
+  );
+
+  player.inventory.push({ id: item.id, label: item.label });
+
+  itemsInRoom.splice(index, 1);
+
+  const pickedTrapKit = (item.id === "trap" || item.label === "TRAP KIT");
+  if (pickedTrapKit) {
+    respawnTrapKitElsewhere(roomName);
+  }
+
+  return true;
+}
+
+function autoPickupNearbyItems(player, tNow) {
+  if (player.stunnedUntil > tNow) return;
+
+  const roomName = player.room;
+  const itemsInRoom = STATE.roomItems[roomName];
+  if (!itemsInRoom || !itemsInRoom.length) return;
+
+  for (let i = itemsInRoom.length - 1; i >= 0; i--) {
+    const it = itemsInRoom[i];
+    if (!it) continue;
+    const dist = Math.hypot(player.x - it.x, player.y - it.y);
+    if (dist <= PICK_RADIUS) {
+      pickupItemFromRoom(player, roomName, itemsInRoom, i, { allowEscape: false });
     }
   }
 }
@@ -927,7 +957,7 @@ function tryArmDoorTrap(player) {
 // --------------------------------------------------
 // Shooting
 // --------------------------------------------------
-function handleShoot(player) {
+function handleShoot(player, message) {
   const tNow = now();
   if (player.stunnedUntil > tNow) return;
   if (tNow - player.lastShotTime < FIRE_RATE_MS) return;
@@ -941,9 +971,27 @@ function handleShoot(player) {
   // velocity is based on the last aim direction, not necessarily movement
   let pvx = player.lastAimX;
   let pvy = player.lastAimY;
-  if (pvx === 0 && pvy === 0) {
-    pvx = 1; // default to shooting right
+
+  if (message) {
+    const { aimX, aimY } = message;
+    if (typeof aimX === "number" && typeof aimY === "number") {
+      const aimMag = Math.hypot(aimX, aimY);
+      if (aimMag > 0.0001) {
+        pvx = aimX / aimMag;
+        pvy = aimY / aimMag;
+        player.lastAimX = pvx;
+        player.lastAimY = pvy;
+      }
+    }
   }
+
+  if (pvx === 0 && pvy === 0) {
+    pvx = 1;
+    pvy = 0;
+    player.lastAimX = pvx;
+    player.lastAimY = pvy;
+  }
+
   const mag = Math.hypot(pvx, pvy) || 1;
 
   const proj = {
@@ -1020,6 +1068,8 @@ function step(dt) {
         }
       }
     }
+
+    autoPickupNearbyItems(p, tNow);
 
     if (!STATE.roundOver) {
       applyFloorTrapIfHit(p, tNow);
