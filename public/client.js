@@ -17,6 +17,9 @@ const legendEl       = document.getElementById("legend");
 const invListEl      = document.getElementById("inventory-list");
 const itemDescEl     = document.getElementById("item-desc-box");
 const radarBoxEl     = document.getElementById("radar-box");
+const lobbyOverlay   = document.getElementById("lobby-overlay");
+const lobbyStatusEl  = document.getElementById("lobby-status");
+const lobbyListEl    = document.getElementById("lobby-waiting");
 const mobileControls = document.getElementById("mobile-controls");
 const btnAction      = document.getElementById("btn-action");
 
@@ -41,9 +44,20 @@ let lastLegendRendered = null;
 // ----- GAME SNAPSHOT STATE -----
 let ws;
 let myId = null;
+let myEmoji = null;
 let seq = 0;
 
+let lobbyState = {
+  phase: "lobby",
+  waiting: [],
+  minPlayers: 2,
+  maxPlayers: 6,
+  activeCount: 0,
+  youEmoji: null
+};
+
 let latest = {
+  phase: "lobby",
   room: null,
   roomW: 320,
   roomH: 200,
@@ -147,6 +161,8 @@ function create() {
     setupActionButton(btnAction, handleAction);
   }
 
+  renderLobbyOverlay();
+
   // websocket setup
   ws = new WebSocket(WS_URL);
   ws.onopen = () => console.log("[client] ws open");
@@ -158,11 +174,28 @@ function create() {
 
     if (m.t === "welcome") {
       myId = m.id;
+      myEmoji = m.emoji || myEmoji;
+      lobbyState.phase = m.phase || lobbyState.phase;
       console.log("[client] welcome, myId=", myId);
       return;
     }
 
+    if (m.t === "lobby") {
+      lobbyState = {
+        phase: m.phase || lobbyState.phase,
+        waiting: m.waiting || [],
+        minPlayers: m.minPlayers ?? lobbyState.minPlayers,
+        maxPlayers: m.maxPlayers ?? lobbyState.maxPlayers,
+        activeCount: m.activeCount ?? lobbyState.activeCount,
+        youEmoji: m.youEmoji || lobbyState.youEmoji
+      };
+      renderLobbyOverlay();
+      return;
+    }
+
     if (m.t === "snapshot") {
+      lobbyState.phase = m.phase || "active";
+      myEmoji = m.youEmoji || myEmoji;
       latest = m;
 
       // draw world / traps / doors
@@ -260,12 +293,12 @@ function update(time, delta) {
       rp.nameText = scene.add.text(
         rp.x,
         rp.y - radius - 14,
-        p.shortId || "??",
+        p.emoji || "??",
         { fontSize: "10px", color: "#ffffff" }
       ).setOrigin(0.5);
       scene.playerLayer.add(rp.nameText);
     }
-    rp.nameText.setText(p.shortId || "??");
+    rp.nameText.setText(p.emoji || "??");
     rp.nameText.setPosition(rp.x, rp.y - radius - 14);
 
     // stun alert
@@ -675,9 +708,11 @@ function drawWinner(scene, winner) {
   scene.winLayer.removeAll(true);
   if (!winner) return;
 
+  const winningPlayer = (latest.players || []).find(p => p.id === winner.id);
+  const winnerTag = winningPlayer?.emoji || winner.id.slice(0,4);
   const textStr = (winner.id === myId)
     ? "YOU ESCAPED!"
-    : "WINNER: " + winner.id.slice(0,4);
+    : "WINNER: " + winnerTag;
 
   const bw = VIEW_W * 0.8;
   const bh = 60;
@@ -698,6 +733,54 @@ function drawWinner(scene, winner) {
     { fontSize: "16px", color: "#ffcc33" }
   ).setOrigin(0.5);
   scene.winLayer.add(t);
+}
+
+// ---------------------------------------------------------
+// Lobby UI
+// ---------------------------------------------------------
+function renderLobbyOverlay() {
+  if (!lobbyOverlay) return;
+
+  const phase = lobbyState.phase || "lobby";
+  const waiting = lobbyState.waiting || [];
+  const isActive = phase === "active";
+
+  if (isActive && latest.players && latest.players.length) {
+    lobbyOverlay.style.display = "none";
+    return;
+  }
+
+  lobbyOverlay.style.display = "flex";
+
+  const needCount = Math.max(0, lobbyState.minPlayers - waiting.length);
+  const statusParts = [];
+  statusParts.push(`Assembling spies (${waiting.length}/${lobbyState.maxPlayers})`);
+  if (!isActive && needCount > 0) {
+    statusParts.push(`Need ${needCount} more to deploy`);
+  }
+  if (isActive) {
+    statusParts.push("Match in progress");
+  }
+
+  if (lobbyStatusEl) {
+    lobbyStatusEl.textContent = statusParts.join(" · ");
+  }
+
+  if (lobbyListEl) {
+    lobbyListEl.innerHTML = "";
+    waiting.forEach((p) => {
+      const li = document.createElement("div");
+      li.className = "lobby-row" + (p.id === myId ? " you" : "");
+      li.textContent = p.emoji || "❔";
+      lobbyListEl.appendChild(li);
+    });
+    if (!waiting.length) {
+      const li = document.createElement("div");
+      li.className = "lobby-row";
+      li.textContent = "…";
+      lobbyListEl.appendChild(li);
+    }
+  }
 }
 
 // ---------------------------------------------------------
