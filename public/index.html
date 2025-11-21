@@ -4,6 +4,7 @@
   <meta charset="utf-8" />
   <title>Spy vs Spy vs Spy vs Spy vs Spy vs Spy</title>
   <meta name="viewport" content="width=device-width,initial-scale=1,user-scalable=no" />
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap">
 
   <style>
     :root {
@@ -11,9 +12,9 @@
       --panel-border: #444;
     }
     body {
-      background: #0d0f14;
+      background: radial-gradient(circle at 10% 20%, #161821 0%, #0b0d12 40%, #06080d 75%);
       color: #fff;
-      font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      font-family: 'Press Start 2P', system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
       margin: 0;
       display: flex;
       flex-direction: column;
@@ -24,7 +25,7 @@
     /* Mobile-first: canvas on top, HUD under it */
     #game-container {
       position: relative;
-      background: #000;
+      background: repeating-linear-gradient(45deg, #0f131a 0, #0f131a 8px, #0b0d12 8px, #0b0d12 16px);
       display: flex;
       justify-content: center;
       align-items: center;
@@ -47,12 +48,12 @@
     #score-line {
       font-size: 13px;
       font-weight: 600;
-      color: #ffcc33;
+      color: #f7e199;
       margin-bottom: 4px;
     }
 
     #legend {
-      color: #aaa;
+      color: #d6d6d6;
       font-size: 11px;
       white-space: pre-line;
       margin-bottom: 8px;
@@ -70,12 +71,13 @@
       flex-direction: column;
       gap: 4px;
       margin-bottom: 8px;
+      font-family: 'Press Start 2P', monospace;
     }
 
     .inv-item {
-      background: #1a1a1a;
-      border: 1px solid #555;
-      border-radius: 4px;
+      background: linear-gradient(90deg, #10131b 0%, #171c29 100%);
+      border: 1px solid #3c4358;
+      border-radius: 6px;
       padding: 4px 6px;
       font-size: 12px;
       color: #fff;
@@ -87,14 +89,91 @@
     }
 
     .inv-item.selected {
-      border-color: #ffcc33;
-      color: #ffcc33;
+      border-color: #f7e199;
+      color: #f7e199;
     }
 
     .inv-slot-idx {
       font-size: 10px;
       color: #888;
       margin-right: 6px;
+    }
+
+    #lobby-overlay {
+      position: absolute;
+      inset: 0;
+      background: rgba(6, 8, 13, 0.9);
+      display: none;
+      align-items: center;
+      justify-content: center;
+      z-index: 10;
+    }
+
+    #lobby-card {
+      background: linear-gradient(135deg, #0c0f17 0%, #0f1420 60%, #0c0f17 100%);
+      border: 2px solid #f7e199;
+      box-shadow: 0 0 24px rgba(0,0,0,0.6);
+      padding: 16px 18px;
+      width: min(360px, 90vw);
+      color: #f7e199;
+      text-align: center;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+
+    #lobby-title {
+      font-size: 14px;
+      letter-spacing: 1px;
+      text-transform: uppercase;
+      color: #ffffff;
+      text-shadow: 0 0 6px rgba(255,255,255,0.3);
+    }
+
+    #lobby-status {
+      font-size: 11px;
+      color: #f7e199;
+      line-height: 1.4;
+    }
+
+    #lobby-waiting {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(48px, 1fr));
+      gap: 6px;
+      background: rgba(0,0,0,0.35);
+      border: 1px dashed #f7e199;
+      padding: 8px;
+      border-radius: 8px;
+    }
+
+    .lobby-row {
+      font-size: 28px;
+      padding: 6px;
+      border-radius: 6px;
+      background: rgba(247, 225, 153, 0.08);
+      border: 1px solid transparent;
+    }
+
+    .lobby-row.you {
+      border-color: #f7e199;
+      box-shadow: 0 0 10px rgba(247, 225, 153, 0.4);
+    }
+
+    #start-button {
+      background: linear-gradient(90deg, #10131b 0%, #171c29 100%);
+      border: 2px solid #f7e199;
+      color: #f7e199;
+      font-family: 'Press Start 2P', monospace;
+      padding: 10px 12px;
+      border-radius: 8px;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      cursor: pointer;
+    }
+
+    #start-button.disabled {
+      opacity: 0.4;
+      cursor: not-allowed;
     }
 
     #item-desc-box {
@@ -179,6 +258,14 @@
 <body>
 
   <div id="game-container">
+    <div id="lobby-overlay">
+      <div id="lobby-card">
+        <div id="lobby-title">Spy vs Spy Briefing Room</div>
+        <div id="lobby-status">Assembling spies…</div>
+        <div id="lobby-waiting"></div>
+        <button id="start-button" type="button">Start Mission</button>
+      </div>
+    </div>
     <!-- Phaser canvas mounts here -->
   </div>
 

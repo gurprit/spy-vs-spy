@@ -27,6 +27,13 @@ const WIN_RADIUS = 24;      // distance to exit door to escape
 const ROUND_END_FREEZE_MS = 3000; // pause before new round
 const SCORE_PER_WIN = 1;
 const SCORE_TARGET = 5;
+const LOBBY_MIN_PLAYERS = 1;
+const LOBBY_MAX_PLAYERS = 6;
+
+const SPY_EMOJIS = [
+  "🕵️‍♂️", "🕵️‍♀️", "🎩", "🕶️", "🤫", "🗡️", "🧥", "📡",
+  "🧳", "🪖", "🛰️", "🪗", "🦹", "🧟", "🕷️", "🦊"
+];
 
 const BOMB_TRIGGER_RADIUS = 28;
 const BOMB_ARM_DELAY_MS = 400; // grace period before it can detonate
@@ -484,8 +491,10 @@ chooseNewMapVariant();
 // GLOBAL STATE
 // --------------------------------------------------
 const STATE = {
+  phase: "lobby",
   tick: 0,
   players: new Map(),    // id -> player
+  lobby: new Map(),
   roomItems: {},         // roomName -> [{id,x,y,label}, ...]
   roomSearchables: {},   // roomName -> [{id,label,x,y,used}, ...]
   roomTraps: {},         // roomName -> [{id,x,y,owner,armed}, ...]  (floor traps)
@@ -498,6 +507,109 @@ const STATE = {
 };
 
 resetRooms();
+
+// --------------------------------------------------
+// Lobby helpers
+// --------------------------------------------------
+function randEmoji() {
+  return SPY_EMOJIS[Math.floor(Math.random() * SPY_EMOJIS.length)];
+}
+
+function broadcastLobbyState() {
+  const waiting = [...STATE.lobby.values()].map((p) => ({
+    id: p.id,
+    emoji: p.emoji
+  }));
+
+  const payloadBase = {
+    t: "lobby",
+    phase: STATE.phase,
+    minPlayers: LOBBY_MIN_PLAYERS,
+    maxPlayers: LOBBY_MAX_PLAYERS,
+    waiting,
+    activeCount: STATE.players.size
+  };
+
+  // notify everyone in lobby
+  STATE.lobby.forEach((p) => {
+    if (p.ws?.readyState === 1) {
+      p.ws.send(JSON.stringify({ ...payloadBase, you: p.id, youEmoji: p.emoji }));
+    }
+  });
+
+  // also let active players know when we're back to lobby
+  STATE.players.forEach((p) => {
+    if (p._ws?.readyState === 1) {
+      p._ws.send(JSON.stringify({ ...payloadBase, you: p.id, youEmoji: p.emoji }));
+    }
+  });
+}
+
+function resetMatchState() {
+  STATE.tick = 0;
+  STATE.roundOver = false;
+  STATE.winner = null;
+  STATE.roundResetAt = 0;
+  chooseNewMapVariant(CURRENT_MAP ? CURRENT_MAP.name : null);
+  resetRooms();
+}
+
+function startMatchFromLobby() {
+  if (STATE.phase === "active") return;
+  if (!STATE.lobby.size) return;
+
+  const waiters = [...STATE.lobby.values()];
+
+  resetMatchState();
+  STATE.phase = "active";
+
+  waiters.slice(0, LOBBY_MAX_PLAYERS).forEach((entry) => {
+    const player = createPlayerFromEntry(entry);
+    STATE.players.set(entry.id, player);
+    STATE.lobby.delete(entry.id);
+    console.log(`[server] player ready ${player.id} ${player.emoji} spawning in ${player.room}`);
+  });
+
+  broadcastLobbyState();
+
+  // kick off snapshots now that they exist
+  STATE.players.forEach((p) => {
+    sendSnapshot(p._ws);
+  });
+}
+
+function createPlayerFromEntry(entry) {
+  const spawn = randSpawn();
+  return {
+    id: entry.id,
+    shortId: entry.id.slice(0,4),
+    emoji: entry.emoji,
+    room: spawn.room,
+    x: spawn.x,
+    y: spawn.y,
+    vx: 0,
+    vy: 0,
+    lastAimX: 1,
+    lastAimY: 0,
+    color: randColor(),
+
+    score: 0,
+
+    lastSeq: 0,
+    lastHeard: now(),
+
+    inventory: [],
+    stunnedUntil: 0,
+
+    health: SHOTS_TO_KILL,
+    lastShotTime: 0,
+
+    disguisedUntil: 0,
+    radarRevealUntil: 0,
+
+    _ws: entry.ws
+  };
+}
 
 // --------------------------------------------------
 // Reset helpers
@@ -580,54 +692,33 @@ function respawnPlayer(p) {
 // --------------------------------------------------
 // Connection
 // --------------------------------------------------
-wss.on("connection", (ws) => {
+wss.on("connection", (ws, req) => {
   const id = crypto.randomUUID();
-  const s = randSpawn();
 
-  const player = {
+  const lobbyEntry = {
     id,
-    shortId: id.slice(0,4),
-    room: s.room,
-    x: s.x,
-    y: s.y,
-    vx: 0,
-    vy: 0,
-    lastAimX: 1,
-    lastAimY: 0,
-    color: randColor(),
-
-    score: 0,
-
-    lastSeq: 0,
-    lastHeard: now(),
-
-    inventory: [],
-    stunnedUntil: 0,
-
-    health: SHOTS_TO_KILL,
-    lastShotTime: 0,
-
-    disguisedUntil: 0,       // NEW
-    radarRevealUntil: 0,     // NEW
-
-    _ws: ws
+    emoji: randEmoji(),
+    ws
   };
 
-  STATE.players.set(id, player);
-  console.log(`[server] player connected ${id} in ${player.room} (${player.x},${player.y})`);
+  STATE.lobby.set(id, lobbyEntry);
+  console.log(`[server] connection ${id} waiting in lobby ${lobbyEntry.emoji}`);
 
   ws.send(JSON.stringify({
     t: "welcome",
     id,
-    tick: STATE.tick
+    emoji: lobbyEntry.emoji,
+    tick: STATE.tick,
+    phase: STATE.phase
   }));
 
-  sendSnapshot(ws);
+  broadcastLobbyState();
+  if (STATE.phase === "active") {
+    // wait in lobby until the next round starts
+    broadcastLobbyState();
+  }
 
   ws.on("message", (buf) => {
-    if (STATE.roundOver) {
-      return; // ignore input during round end freeze
-    }
     let m;
     try {
       m = JSON.parse(buf);
@@ -635,6 +726,17 @@ wss.on("connection", (ws) => {
       return;
     }
 
+    if (m.t === "start") {
+      startMatchFromLobby();
+      return;
+    }
+
+    const player = STATE.players.get(id);
+    if (!player) return;
+
+    if (STATE.roundOver || STATE.phase !== "active") {
+      return; // ignore input during round end freeze
+    }
     if (m.t === "input") {
       handleInput(player, m);
     }
@@ -655,6 +757,17 @@ wss.on("connection", (ws) => {
   ws.on("close", () => {
     console.log(`[server] player disconnected ${id}`);
     STATE.players.delete(id);
+    STATE.lobby.delete(id);
+    broadcastLobbyState();
+
+    if (STATE.phase === "active") {
+      if (STATE.players.size === 0) {
+        STATE.phase = "lobby";
+        broadcastLobbyState();
+      }
+    }
+
+    broadcastLobbyState();
   });
 });
 
@@ -1382,16 +1495,16 @@ function snapshotFor(playerId) {
     // If it's me, or disguise expired, send real info.
     const iAmThisSpy = (p.id === me.id);
     let sendColor = p.color;
-    let sendShortId = p.shortId;
+    let sendEmoji = p.emoji;
 
     if (disguised && !iAmThisSpy) {
       sendColor = "#aaaaaa";   // generic grey
-      sendShortId = "????";
+      sendEmoji = "❓";
     }
 
     visiblePlayers.push({
       id: p.id,
-      shortId: sendShortId,
+      emoji: sendEmoji,
       room: p.room,
       x: Math.round(p.x),
       y: Math.round(p.y),
@@ -1417,6 +1530,8 @@ function snapshotFor(playerId) {
     t: "snapshot",
     tick: STATE.tick,
     you: me.id,
+    youEmoji: me.emoji,
+    phase: STATE.phase,
     mapName: CURRENT_MAP ? CURRENT_MAP.name : "",
 
     room: me.room,
@@ -1504,7 +1619,7 @@ function findItemLocation(idMatch, labelMatch) {
     if (hasItem) {
       return {
         room: player.room,
-        carriedBy: player.shortId
+        carriedBy: player.emoji
       };
     }
   }
@@ -1543,8 +1658,10 @@ setInterval(() => {
   const dt = Math.min(0.1, (t - last) / 1000);
   last = t;
 
-  step(dt);
-  broadcastSnapshots();
+  if (STATE.phase === "active" && STATE.players.size) {
+    step(dt);
+    broadcastSnapshots();
+  }
 }, 1000 / TICK_HZ);
 
 // --------------------------------------------------
