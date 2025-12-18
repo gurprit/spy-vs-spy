@@ -27,8 +27,7 @@ const WIN_RADIUS = 24;      // distance to exit door to escape
 const ROUND_END_FREEZE_MS = 3000; // pause before new round
 const SCORE_PER_WIN = 1;
 const SCORE_TARGET = 5;
-const LOBBY_MIN_PLAYERS = 2;
-const LOBBY_MAX_PLAYERS = 6;
+const MAX_PLAYERS = 6;
 
 const SPY_EMOJIS = [
   "🕵️‍♂️", "🕵️‍♀️", "🎩", "🕶️", "🤫", "🗡️", "🧥", "📡",
@@ -491,10 +490,9 @@ chooseNewMapVariant();
 // GLOBAL STATE
 // --------------------------------------------------
 const STATE = {
-  phase: "lobby",
+  phase: "active",
   tick: 0,
   players: new Map(),    // id -> player
-  lobby: new Map(),
   roomItems: {},         // roomName -> [{id,x,y,label}, ...]
   roomSearchables: {},   // roomName -> [{id,label,x,y,used}, ...]
   roomTraps: {},         // roomName -> [{id,x,y,owner,armed}, ...]  (floor traps)
@@ -509,40 +507,10 @@ const STATE = {
 resetRooms();
 
 // --------------------------------------------------
-// Lobby helpers
+// Match helpers
 // --------------------------------------------------
 function randEmoji() {
   return SPY_EMOJIS[Math.floor(Math.random() * SPY_EMOJIS.length)];
-}
-
-function broadcastLobbyState() {
-  const waiting = [...STATE.lobby.values()].map((p) => ({
-    id: p.id,
-    emoji: p.emoji
-  }));
-
-  const payloadBase = {
-    t: "lobby",
-    phase: STATE.phase,
-    minPlayers: LOBBY_MIN_PLAYERS,
-    maxPlayers: LOBBY_MAX_PLAYERS,
-    waiting,
-    activeCount: STATE.players.size
-  };
-
-  // notify everyone in lobby
-  STATE.lobby.forEach((p) => {
-    if (p.ws?.readyState === 1) {
-      p.ws.send(JSON.stringify({ ...payloadBase, you: p.id, youEmoji: p.emoji }));
-    }
-  });
-
-  // also let active players know when we're back to lobby
-  STATE.players.forEach((p) => {
-    if (p._ws?.readyState === 1) {
-      p._ws.send(JSON.stringify({ ...payloadBase, you: p.id, youEmoji: p.emoji }));
-    }
-  });
 }
 
 function resetMatchState() {
@@ -554,49 +522,11 @@ function resetMatchState() {
   resetRooms();
 }
 
-function startMatchFromLobby(forceSolo = false) {
-  if (STATE.phase === "active") return;
-  if (!STATE.lobby.size) return;
-
-  const waiters = [...STATE.lobby.values()];
-  const readyCount = waiters.length;
-  if (!forceSolo && readyCount < LOBBY_MIN_PLAYERS) return;
-
-  resetMatchState();
-  STATE.phase = "active";
-
-  waiters.slice(0, LOBBY_MAX_PLAYERS).forEach((entry) => {
-    const player = createPlayerFromEntry(entry);
-    STATE.players.set(entry.id, player);
-    STATE.lobby.delete(entry.id);
-    console.log(`[server] player ready ${player.id} ${player.emoji} spawning in ${player.room}`);
-  });
-
-  broadcastLobbyState();
-
-  // kick off snapshots now that they exist
-  STATE.players.forEach((p) => {
-    sendSnapshot(p._ws);
-  });
-}
-
-function moveActivePlayersToLobby(reason) {
-  if (!STATE.players.size) return;
-  STATE.players.forEach((p) => {
-    STATE.lobby.set(p.id, { id: p.id, emoji: p.emoji, ws: p._ws });
-  });
-  STATE.players.clear();
-  STATE.phase = "lobby";
-  console.log(`[server] moving players back to lobby (${reason})`);
-  broadcastLobbyState();
-}
-
-function createPlayerFromEntry(entry) {
+function createPlayer(id, ws, emoji) {
   const spawn = randSpawn();
   return {
-    id: entry.id,
-    shortId: entry.id.slice(0,4),
-    emoji: entry.emoji,
+    id,
+    emoji,
     room: spawn.room,
     x: spawn.x,
     y: spawn.y,
@@ -620,29 +550,22 @@ function createPlayerFromEntry(entry) {
     disguisedUntil: 0,
     radarRevealUntil: 0,
 
-    _ws: entry.ws
+    _ws: ws
   };
 }
 
-function addEntryToActiveMatch(entry) {
-  if (STATE.phase !== "active") return false;
-  if (STATE.players.size >= LOBBY_MAX_PLAYERS) return false;
-  const player = createPlayerFromEntry(entry);
-  STATE.players.set(entry.id, player);
-  STATE.lobby.delete(entry.id);
-  console.log(`[server] player ${player.id} joined active match as ${player.emoji}`);
-  sendSnapshot(player._ws);
-  broadcastLobbyState();
-  return true;
-}
+function addPlayerToActiveMatch(id, ws, emoji) {
+  if (STATE.players.size >= MAX_PLAYERS) return null;
 
-function fillActiveMatchFromLobby() {
-  if (STATE.phase !== "active") return;
-  if (!STATE.lobby.size) return;
-  const slots = LOBBY_MAX_PLAYERS - STATE.players.size;
-  if (slots <= 0) return;
-  const waiters = [...STATE.lobby.values()].slice(0, slots);
-  waiters.forEach(addEntryToActiveMatch);
+  if (!STATE.players.size || STATE.phase !== "active") {
+    resetMatchState();
+    STATE.phase = "active";
+  }
+
+  const player = createPlayer(id, ws, emoji);
+  STATE.players.set(id, player);
+  console.log(`[server] player ready ${player.id} ${player.emoji} spawning in ${player.room}`);
+  return player;
 }
 
 // --------------------------------------------------
@@ -728,33 +651,22 @@ function respawnPlayer(p) {
 // --------------------------------------------------
 wss.on("connection", (ws, req) => {
   const id = crypto.randomUUID();
-  const url = new URL(req.url || "/", "http://localhost");
-  const wantsSolo = url.searchParams.get("solo") === "1" || url.searchParams.get("solo") === "true";
-
-  const lobbyEntry = {
-    id,
-    emoji: randEmoji(),
-    ws,
-    wantsSolo
-  };
-
-  STATE.lobby.set(id, lobbyEntry);
-  console.log(`[server] connection ${id} waiting in lobby ${lobbyEntry.emoji}`);
+  const emoji = randEmoji();
+  const player = addPlayerToActiveMatch(id, ws, emoji);
+  if (!player) {
+    ws.close(1013, "Match full");
+    return;
+  }
 
   ws.send(JSON.stringify({
     t: "welcome",
     id,
-    emoji: lobbyEntry.emoji,
+    emoji,
     tick: STATE.tick,
     phase: STATE.phase
   }));
 
-  broadcastLobbyState();
-  if (STATE.phase === "active") {
-    addEntryToActiveMatch(lobbyEntry);
-  } else {
-    startMatchFromLobby(wantsSolo);
-  }
+  sendSnapshot(ws);
 
   ws.on("message", (buf) => {
     const player = STATE.players.get(id);
@@ -789,19 +701,15 @@ wss.on("connection", (ws, req) => {
 
   ws.on("close", () => {
     console.log(`[server] player disconnected ${id}`);
-    STATE.players.delete(id);
-    STATE.lobby.delete(id);
-    broadcastLobbyState();
-
-    if (STATE.phase === "active") {
-      fillActiveMatchFromLobby();
-      if (STATE.players.size < LOBBY_MIN_PLAYERS) {
-        moveActivePlayersToLobby("too few players");
-      }
+    const player = STATE.players.get(id);
+    if (player) {
+      dropInventory(player);
     }
+    STATE.players.delete(id);
 
-    if (STATE.phase === "lobby") {
-      startMatchFromLobby();
+    if (!STATE.players.size) {
+      resetMatchState();
+      STATE.phase = "active";
     }
   });
 });

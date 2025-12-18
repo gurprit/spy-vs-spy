@@ -99,75 +99,6 @@
       margin-right: 6px;
     }
 
-    #lobby-overlay {
-      position: absolute;
-      inset: 0;
-      background: rgba(6, 8, 13, 0.9);
-      display: none;
-      align-items: center;
-      justify-content: center;
-      z-index: 10;
-    }
-
-    #lobby-card {
-      background: linear-gradient(135deg, #0c0f17 0%, #0f1420 60%, #0c0f17 100%);
-      border: 2px solid #f7e199;
-      box-shadow: 0 0 24px rgba(0,0,0,0.6);
-      padding: 16px 18px;
-      width: min(360px, 90vw);
-      color: #f7e199;
-      text-align: center;
-      display: flex;
-      flex-direction: column;
-      gap: 10px;
-    }
-
-    #lobby-title {
-      font-size: 14px;
-      letter-spacing: 1px;
-      text-transform: uppercase;
-      color: #ffffff;
-      text-shadow: 0 0 6px rgba(255,255,255,0.3);
-    }
-
-    #lobby-status {
-      font-size: 11px;
-      color: #f7e199;
-      line-height: 1.4;
-    }
-
-    #lobby-waiting {
-      display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(48px, 1fr));
-      gap: 6px;
-      background: rgba(0,0,0,0.35);
-      border: 1px dashed #f7e199;
-      padding: 8px;
-      border-radius: 8px;
-    }
-
-    .lobby-row {
-      font-size: 28px;
-      padding: 6px;
-      border-radius: 6px;
-      background: rgba(247, 225, 153, 0.08);
-      border: 1px solid transparent;
-    }
-
-    .lobby-row.you {
-      border-color: #f7e199;
-      box-shadow: 0 0 10px rgba(247, 225, 153, 0.4);
-    }
-
-    #solo-link {
-      color: #f7e199;
-      font-size: 10px;
-      text-decoration: none;
-      text-transform: uppercase;
-      letter-spacing: 0.5px;
-    }
-    #solo-link:hover { text-decoration: underline; }
-
     #item-desc-box {
       background: #111;
       border: 1px solid #33ff33;
@@ -250,14 +181,6 @@
 <body>
 
   <div id="game-container">
-    <div id="lobby-overlay">
-      <div id="lobby-card">
-        <div id="lobby-title">Spy vs Spy Briefing Room</div>
-        <div id="lobby-status">Assembling spies…</div>
-        <div id="lobby-waiting"></div>
-        <a id="solo-link" href="?solo=1">Solo test link</a>
-      </div>
-    </div>
     <!-- Phaser canvas mounts here -->
   </div>
 
